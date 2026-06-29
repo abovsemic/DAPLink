@@ -44,6 +44,8 @@
 #include "M480.h"
 #elif defined (INTERFACE_NRF52820)
 #include "nrf52820.h"
+#elif defined (INTERFACE_ABOV)
+#include "abov_config.h"
 #else
 #error "CMSIS core headers needed"
 #endif

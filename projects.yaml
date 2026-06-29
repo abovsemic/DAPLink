@@ -212,7 +212,6 @@ projects:
         - *module_if
         - *module_hic_a31g336
         - records/family/all_family.yaml
-        - records/usb/usb-bulk.yaml
 
     # Other projects
     k20dx_ep_agora_if:

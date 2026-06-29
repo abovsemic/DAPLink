@@ -1,0 +1,1952 @@
+/*
+ * Copyright (c) 2004-2016 ARM Limited. All rights reserved.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*----------------------------------------------------------------------------
+*      RL-ARM - USB
+*----------------------------------------------------------------------------
+*      Name:    usbd_STM32F103.c
+*      Purpose: Hardware Layer module for ST STM32F103
+*      Rev.:    V4.70
+*---------------------------------------------------------------------------*/
+
+/* Double Buffering is not supported                                         */
+
+#include <rl_usb.h>
+#include "abov_config.h"
+#include "hal_pcu.h"
+#include "hal_usb.h"
+#include "IO_Config.h"
+#include "cortex_m.h"
+#include "string.h"
+#include "hal_usb.h"
+#include "usbd_core.h"
+
+#include "debug_log.h"
+
+#define __NO_USB_LIB_C
+#include "usb_config.c"
+
+
+#include "usb_setup.h"
+#include "usb_desc_types.h"
+#include "usb_cdc_desc_types.h"
+#include "usb_hid_desc_types.h"
+
+
+#define USB_EVT_QUEUE_SIZE    16
+
+typedef struct {
+    uint32_t un32Event;
+    USB_EVENT_e eUsbEvt;
+} USB_EvtItem_t;
+
+typedef struct {
+    USB_EvtItem_t tItems[USB_EVT_QUEUE_SIZE];
+    uint32_t un32Cnt;
+    volatile uint8_t u8Head;
+    volatile uint8_t u8Tail;
+} USB_EvtQueue_t;
+
+static volatile USB_EvtQueue_t g_tUsbEvtQ = { .un32Cnt = 0, .u8Head = 0, .u8Tail = 0 };
+
+static uint8_t un8DDBuf[] = {0x12,0x1,0x0,0x2,0xef,0x2,0x1,0x40,0x29,0x1a,0x3,0x70,0x0,0x0,0x1,0x2,0x3,0x1};
+
+static uint8_t un8CDBuf[] = {
+    0x09, 0x02, 0x5F, 0x00, 0x03, 0x01, 0x00, 0x80, 0x32, 0x08, 
+    0x0B, 0x00, 0x02, 0x02, 0x02, 0x01, 0x00, 0x09, 0x04, 0x00, 
+    0x00, 0x00, 0x02, 0x02, 0x01, 0x00, 0x05, 0x24, 0x00, 0x10, 
+    0x01, 0x04, 0x24, 0x02, 0x02, 0x05, 0x24, 0x06, 0x00, 0x01, 
+    0x09, 0x04, 0x01, 0x00, 0x02, 0x0A, 0x00, 0x00, 0x00, 0x07, 
+    0x05, 0x01, 0x02, 0x40, 0x00, 0x00, 0x07, 0x05, 0x81, 0x02, 
+    0x40, 0x00, 0x00, 0x09, 
+    0x04, 0x02, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00, 0x09, 0x21, 
+    0x00, 0x01, 0x00, 0x01, 0x22, 0x22, 0x00, 0x07, 0x05, 0x02, 
+    0x03, 0x40, 0x00, 0x01, 0x07, 0x05, 0x82, 0x03, 0x40, 0x00, 
+    0x01
+};
+
+static void USB_HW_IRQHandler(uint32_t un32Event, void *pContext);
+
+/* HCLK is generated from HSI by default */
+#define TC_SYSTICK_1MS      1000
+
+extern uint32_t SystemCoreClock;
+static volatile uint32_t s_un32SysTimerVal=0;
+
+static uint8_t s_un8FAddr = 0;
+static bool s_bFaddr = false;
+static volatile uint8_t s_un8EP0Dir;
+static volatile uint8_t s_un8EP0DataOut;
+
+static volatile uint8_t ep0_setup_processing = 0;
+static volatile uint8_t ep0_h2d_candidate    = 0;
+static volatile uint8_t ep0_setup_stalled    = 0;
+static volatile uint8_t ep0_status_in_zlp    = 0;
+static volatile uint8_t ep0_wait_data_out    = 0;
+
+#define DEVICE_DESC_SIZE       18
+#define USB_SETUP_PKT_SIZE     8
+#define USB_EP0_MAX_PKT_SIZE   64
+
+#define DEBUG                  0
+#define USB_CLASS_TYPE         1 /* (1 == CDC, 2 == HID) */
+#define TEST_SINGLE            0
+
+#if (DEBUG == 1)
+#define USB_LOG    LOG
+#else
+#define USB_LOG(...)
+#endif
+
+typedef enum
+{
+    USB_EP0_RESP_NONE,   /* Only Data stage (ZLP) */
+    USB_EP0_RESP_IN,     /* Device to Host data */
+    USB_EP0_RESP_OUT,    /* Host to Device data */
+    USB_EP0_RESP_STATUS, /* HW Status Stage */
+    USB_EP0_RESP_NODATA,
+    USB_EP0_RESP_STALL
+} USB_EP0_RespType_e;
+
+typedef struct
+{
+    USB_EP0_RespType_e type;
+    uint8_t    *pData;
+    uint16_t          length;
+} USB_EP0_Response_t;
+
+typedef struct
+{
+    const uint8_t *pBuf;
+    uint16_t       total;
+    uint16_t       sent;
+    bool           needZlp;
+} USB_EP0_TxCtx_t;
+
+typedef struct
+{
+    uint8_t  *pBuf;
+    uint16_t total;
+    uint16_t recv;
+} USB_EP0_RxState_t;
+
+static USB_EP0_TxCtx_t s_ep0Tx;
+static USB_EP0_RxState_t s_ep0Rx;
+
+static CDC_LineCoding_t s_tCdcLineCoding = {
+    .dwDTERate = 115200,
+    .bCharFormat = 0,
+    .bParityType = 0,
+    .bDataBits = 8
+};
+
+#pragma pack(push, 1)
+#pragma pack(push, 1)
+typedef struct {
+    USB_ConfigDescriptor_t    config;
+    
+    /* IAD (8 Bytes) */
+    uint8_t  iad_bLength;
+    uint8_t  iad_bDescriptorType;
+    uint8_t  iad_bFirstInterface;
+    uint8_t  iad_bInterfaceCount;
+    uint8_t  iad_bFunctionClass;
+    uint8_t  iad_bFunctionSubClass;
+    uint8_t  iad_bFunctionProtocol;
+    uint8_t  iad_iFunction;
+
+    /* IF 0, 1 (CDC) */
+    USB_InterfaceDescriptor_t if_comm;
+    CDC_HeaderDesc_t          cdc_header;
+    CDC_ACMDesc_t             cdc_acm;
+    CDC_UnionDesc_t           cdc_union;
+    USB_InterfaceDescriptor_t if_data;
+    USB_EndpointDescriptor_t  cdc_ep_out;
+    USB_EndpointDescriptor_t  cdc_ep_in;
+
+    /* IF 2 (HID) */
+    USB_InterfaceDescriptor_t if_hid;
+    HID_HIDDesc_t             hid_desc;
+    USB_EndpointDescriptor_t  hid_ep_out;
+    USB_EndpointDescriptor_t  hid_ep_in;
+} USB_CompositeConfigDescSet_t;
+
+typedef struct
+{
+    /* Configuration */
+    USB_ConfigDescriptor_t     config;
+
+    /* Interface 0 : CDC Control (ACM) */
+    USB_InterfaceDescriptor_t  if_comm;
+    CDC_HeaderDesc_t           cdc_header;
+    CDC_ACMDesc_t              cdc_acm;
+    CDC_UnionDesc_t            cdc_union;
+
+    /* Interface 1 : CDC Data */
+    USB_InterfaceDescriptor_t  if_data;
+    USB_EndpointDescriptor_t   ep_out;   // EP2 OUT
+    USB_EndpointDescriptor_t   ep_in;    // EP1 IN
+
+} USB_CDC_ConfigDescSet_t;
+
+typedef struct
+{
+    /* Configuration */
+    USB_ConfigDescriptor_t     config;
+
+    /* Interface 0 : HID */
+    USB_InterfaceDescriptor_t  if_hid;
+    HID_HIDDesc_t              hid_desc;
+
+    /* HID IN/OUT Endpoints */
+    USB_EndpointDescriptor_t   ep_out;   // EP2 OUT
+    USB_EndpointDescriptor_t   ep_in;    // EP2 IN
+
+} USB_HID_ConfigDescSet_t;
+
+#pragma pack(pop)
+
+static const USB_CDC_ConfigDescSet_t g_usbCDCConfigDesc =
+{
+    /* Configuration */
+    .config =
+    {
+        .bLength             = 9,
+        .bDescriptorType     = 0x02,
+        .wTotalLength        = sizeof(USB_CDC_ConfigDescSet_t), // 55
+        .bNumInterfaces      = 2,
+        .bConfigurationValue = 1,
+        .iConfiguration      = 0,
+        .bmAttributes        = 0x80,
+        .bMaxPower           = 50
+    },
+
+    /* Interface 0 : CDC Control */
+    .if_comm =
+    {
+        .bLength            = 9,
+        .bDescriptorType    = 0x04,
+        .bInterfaceNumber   = 0,
+        .bAlternateSetting  = 0,
+        .bNumEndpoints      = 0,
+        .bInterfaceClass    = 0x02,
+        .bInterfaceSubClass = 0x02,
+        .bInterfaceProtocol = 0x01,
+        .iInterface         = 0
+    },
+
+    .cdc_header =
+    {
+        .bLength    = 5,
+        .bDescriptorType    = 0x24,
+        .bDescriptorSubtype = 0x00,
+        .bcdCDC             = 0x0110
+    },
+
+    .cdc_acm =
+    {
+        .bLength    = 4,
+        .bDescriptorType    = 0x24,
+        .bDescriptorSubtype = 0x02,
+        .bmCapabilities     = 0x02
+    },
+
+    .cdc_union =
+    {
+        .bLength    = 5,
+        .bDescriptorType    = 0x24,
+        .bDescriptorSubtype = 0x06,
+        .bMasterInterface  = 0,
+        .bSlaveInterface0  = 1
+    },
+
+    /* Interface 1 : CDC Data */
+    .if_data =
+    {
+        .bLength            = 9,
+        .bDescriptorType    = 0x04,
+        .bInterfaceNumber   = 1,
+        .bAlternateSetting  = 0,
+        .bNumEndpoints      = 2,
+        .bInterfaceClass    = 0x0A,
+        .bInterfaceSubClass = 0x00,
+        .bInterfaceProtocol = 0x00,
+        .iInterface         = 0
+    },
+
+    /* EP1 OUT */
+    .ep_out =
+    {
+        .bLength          = 7,
+        .bDescriptorType  = 0x05,
+        .bEndpointAddress = 0x01,   // ¿? EP1 OUT
+        .bmAttributes     = 0x02,   // Bulk
+        .wMaxPacketSize   = 64,
+        .bInterval        = 0
+    },
+
+    /* EP1 IN */
+    .ep_in =
+    {
+        .bLength          = 7,
+        .bDescriptorType  = 0x05,
+        .bEndpointAddress = 0x81,   // ¿? EP1 IN
+        .bmAttributes     = 0x02,   // Bulk
+        .wMaxPacketSize   = 64,
+        .bInterval        = 0
+    }
+};
+
+/* Report Descriptor for test
+ * Input  : 8 bytes
+ * Output : 8 bytes
+ */
+static const uint8_t g_HID_ReportDesc[] =
+{
+    0x06, 0x00, 0xFF,      // Usage Page (Vendor Defined)
+    0x09, 0x01,            // Usage (Vendor Usage 1)
+    0xA1, 0x01,            // Collection (Application)
+
+    /* Input Report (Device -> Host) */
+    0x09, 0x02,            //   Usage
+    0x15, 0x00,            //   Logical Min (0)
+    0x26, 0xFF, 0x00,      //   Logical Max (255)
+    0x75, 0x08,            //   Report Size (8 bits)
+    0x95, 0x40,            //   Report Count (64 bytes) - EP MaxSizeì ì¼ì¹ ê¶ì¥
+    0x81, 0x02,            //   Input (Data,Var,Abs)
+
+    /* Output Report (Host -> Device) */
+    0x09, 0x03,            //   Usage
+    0x15, 0x00,            //   Logical Min (0)
+    0x26, 0xFF, 0x00,      //   Logical Max (255)
+    0x75, 0x08,            //   Report Size (8 bits)
+    0x95, 0x40,            //   Report Count (64 bytes) - Inputê³¼ ë§ì¶ë ê² ìì 
+    0x91, 0x02,            //   Output (Data,Var,Abs)
+
+    0xC0                   // End Collection
+};
+#if 0
+static const uint8_t g_HID_ReportDesc[] =
+{
+    0x06, 0x00, 0xFF,      // Usage Page (Vendor Defined)
+    0x09, 0x01,            // Usage (Vendor Usage 1)
+    0xA1, 0x01,            // Collection (Application)
+
+    /* Input Report */
+    0x09, 0x02,            //   Usage
+    0x15, 0x00,            //   Logical Min (0)
+    0x26, 0xFF, 0x00,      //   Logical Max (255)
+    0x75, 0x08,            //   Report Size (8 bits)
+    0x95, 0x40,            //   Report Count (8 bytes)
+    0x81, 0x02,            //   Input (Data,Var,Abs)
+
+    /* Output Report */
+    0x09, 0x03,
+    0x15, 0x00,
+    0x26, 0xFF, 0x00,
+    0x75, 0x08,
+    0x95, 0x08,
+    0x91, 0x02,            // Output (Data,Var,Abs)
+
+    0xC0                   // End Collection
+};
+#endif
+
+static const USB_HID_ConfigDescSet_t g_usbHIDConfigDesc =
+{
+    /* Configuration */
+    .config =
+    {
+        .bLength             = 9,
+        .bDescriptorType     = 0x02,
+        .wTotalLength        = sizeof(USB_HID_ConfigDescSet_t),
+        .bNumInterfaces      = 1,
+        .bConfigurationValue = 1,
+        .iConfiguration      = 0,
+        .bmAttributes        = 0x80,
+        .bMaxPower           = 32 
+    },
+
+    /* Interface 0 : HID */
+    .if_hid =
+    {
+        .bLength            = 9,
+        .bDescriptorType    = 0x04,
+        .bInterfaceNumber   = 0,
+        .bAlternateSetting  = 0,
+        .bNumEndpoints      = 2,
+        .bInterfaceClass    = 0x03,   // HID
+        .bInterfaceSubClass = 0x00,   // No Boot Interface
+        .bInterfaceProtocol = 0x00,   // Generic HID
+        .iInterface         = 0
+    },
+
+    .hid_desc =
+    {
+        .bLength            = 9,
+        .bDescriptorType    = 0x21,
+        .bcdHID             = 0x0100,
+        .bCountryCode       = 0,
+        .bNumDescriptors    = 1,
+        .bReportDescType    = 0x22,
+        .wReportDescLength  = sizeof(g_HID_ReportDesc)
+    },
+
+    /* EP2 OUT */
+    .ep_out =
+    {
+        .bLength          = 7,
+        .bDescriptorType  = 0x05,
+        .bEndpointAddress = 0x01,     // EP2 OUT
+        .bmAttributes     = 0x03,     // Interrupt
+        .wMaxPacketSize   = 64,
+        .bInterval        = 1
+    },
+
+    /* EP2 IN */
+    .ep_in =
+    {
+        .bLength          = 7,
+        .bDescriptorType  = 0x05,
+        .bEndpointAddress = 0x81,     // EP2 IN
+        .bmAttributes     = 0x03,     // Interrupt
+        .wMaxPacketSize   = 64,
+        .bInterval        = 1
+    }
+};
+
+static const USB_CompositeConfigDescSet_t g_usbCompositeConfigDesc =
+{
+    /* --- Configuration Descriptor --- */
+    .config =
+    {
+        .bLength             = 9,
+        .bDescriptorType     = 0x02,
+        .wTotalLength        = 95,
+        .bNumInterfaces      = 3,
+        .bConfigurationValue = 1,
+        .iConfiguration      = 0,
+        .bmAttributes        = 0x80,
+        .bMaxPower           = 50
+    },
+
+    /* --- Interface Association Descriptor --- */
+    .iad_bLength             = 8,
+    .iad_bDescriptorType     = 0x0B,
+    .iad_bFirstInterface     = 0,
+    .iad_bInterfaceCount     = 2,
+    .iad_bFunctionClass      = 0x02,                 // CDC Control
+    .iad_bFunctionSubClass   = 0x02,                 // ACM
+    .iad_bFunctionProtocol   = 0x01,                 // AT Commands
+    .iad_iFunction           = 0,
+
+    /* --- [Interface 0] CDC Control --- */
+    .if_comm =
+    {
+        .bLength             = 9,
+        .bDescriptorType     = 0x04,
+        .bInterfaceNumber    = 0,
+        .bAlternateSetting   = 0,
+        .bNumEndpoints       = 0,
+        .bInterfaceClass     = 0x02,
+        .bInterfaceSubClass  = 0x02,
+        .bInterfaceProtocol  = 0x01,
+        .iInterface          = 0
+    },
+
+    .cdc_header =
+    {
+        .bLength             = 5,
+        .bDescriptorType     = 0x24,                 // CS_INTERFACE
+        .bDescriptorSubtype  = 0x00,                 // Header
+        .bcdCDC              = 0x0110
+    },
+
+    .cdc_acm =
+    {
+        .bLength             = 4,
+        .bDescriptorType     = 0x24,                 // CS_INTERFACE
+        .bDescriptorSubtype  = 0x02,                 // ACM
+        .bmCapabilities      = 0x02
+    },
+
+    .cdc_union =
+    {
+        .bLength             = 5,
+        .bDescriptorType     = 0x24,                 // CS_INTERFACE
+        .bDescriptorSubtype  = 0x06,                 // Union
+        .bMasterInterface    = 0,
+        .bSlaveInterface0    = 1
+    },
+
+    /* --- [Interface 1] CDC Data --- */
+    .if_data =
+    {
+        .bLength             = 9,
+        .bDescriptorType     = 0x04,
+        .bInterfaceNumber    = 1,
+        .bAlternateSetting   = 0,
+        .bNumEndpoints       = 2,
+        .bInterfaceClass     = 0x0A,
+        .bInterfaceSubClass  = 0x00,
+        .bInterfaceProtocol  = 0x00,
+        .iInterface          = 0
+    },
+
+    .cdc_ep_out =
+    {
+        .bLength             = 7,
+        .bDescriptorType     = 0x05,
+        .bEndpointAddress    = 0x01,                 // ?? CDC? ?? (EP1 OUT)
+        .bmAttributes        = 0x02,
+        .wMaxPacketSize      = 64,
+        .bInterval           = 0
+    },
+
+    .cdc_ep_in =
+    {
+        .bLength             = 7,
+        .bDescriptorType     = 0x05,
+        .bEndpointAddress    = 0x81,                 // ?? CDC? ?? (EP1 IN)
+        .bmAttributes        = 0x02,
+        .wMaxPacketSize      = 64,
+        .bInterval           = 0
+    },
+
+    /* --- [Interface 2] HID --- */
+    .if_hid =
+    {
+        .bLength             = 9,
+        .bDescriptorType     = 0x04,
+        .bInterfaceNumber    = 2,
+        .bAlternateSetting   = 0,
+        .bNumEndpoints       = 2,
+        .bInterfaceClass     = 0x03,
+        .bInterfaceSubClass  = 0x00,
+        .bInterfaceProtocol  = 0x00,
+        .iInterface          = 0
+    },
+
+    .hid_desc =
+    {
+        .bLength             = 9,
+        .bDescriptorType     = 0x21,
+        .bcdHID              = 0x0100,
+        .bCountryCode        = 0,
+        .bNumDescriptors     = 1,
+        .bReportDescType     = 0x22,
+        .wReportDescLength   = sizeof(g_HID_ReportDesc)
+    },
+
+    .hid_ep_out =
+    {
+        .bLength             = 7,
+        .bDescriptorType     = 0x05,
+        .bEndpointAddress    = 0x02,                 // HID? EP2 OUT
+        .bmAttributes        = 0x03,
+        .wMaxPacketSize      = 64,
+        .bInterval           = 1
+    },
+
+    .hid_ep_in =
+    {
+        .bLength             = 7,
+        .bDescriptorType     = 0x05,
+        .bEndpointAddress    = 0x82,                 // HID? EP2 IN
+        .bmAttributes        = 0x03,
+        .wMaxPacketSize      = 64,
+        .bInterval           = 1
+    }
+};
+
+const uint8_t s_aun8DevDesc[DEVICE_DESC_SIZE] =
+{
+    0x12,       // bLength = 18
+    0x01,       // bDescriptorType = Device
+    0x00, 0x02, // bcdUSB = 2.00
+    0xEF,       // bDeviceClass
+    0x02,       // bDeviceSubClass
+    0x01,       // bDeviceProtocol
+    0x40,       // bMaxPacketSize0 = 64
+    0x29, 0x1A, // idVendor
+    0x03, 0x70, // idProduct
+    0x00, 0x00, // bcdDevice
+    0x01,       // iManufacturer
+    0x02,       // iProduct
+    0x03,       // iSerialNumber
+    0x01        // bNumConfigurations
+};
+
+#if 1//defined(USB_STRING_SUPPORT)
+// bLength = 18
+// bDescriptorType = STRING
+static const uint8_t ms_os_string_desc[] =
+{
+    18,        // bLength
+    0x03,      // STRING
+    'M', 0,
+    'S', 0,
+    'F', 0,
+    'T', 0,
+    '1', 0,
+    '0', 0,
+    '0', 0
+};
+
+static const uint8_t g_str3_serial[] = {
+    18, 0x03,
+    '1',0, '2',0, '3',0, '4',0,
+    '5',0, '6',0, '7',0, '8',0
+};
+
+static const uint8_t usb_string_langid[] =
+{
+    0x04,       // bLength
+    0x03,       // bDescriptorType = STRING
+    0x09, 0x04  // LANGID = 0x0409 (English - US)
+};
+
+static const uint8_t usb_string_product[] =
+{
+    30, 0x03,
+    'U',0, 'S',0, 'B',0, ' ',0,
+    'C',0, 'D',0, 'C',0, ' ',0,
+    'D',0, 'e',0, 'v',0, 'i',0,
+    'c',0, 'e',0
+};
+
+static const uint8_t usb_string_hid_product[] =
+{
+    30, 0x03,
+    'U',0, 'S',0, 'B',0, ' ',0,
+    'H',0, 'I',0, 'D',0, ' ',0,
+    'D',0, 'e',0, 'v',0, 'i',0,
+    'c',0, 'e',0
+};
+
+static const uint8_t usb_string_vendor[] =
+{
+    10, 0x03,           // bLength (10), bDescriptorType (String)
+    'A', 0, 'B', 0, 'O', 0, 'V', 0
+};
+
+static const uint8_t usb_string_serial[] =
+{
+    10, 0x03,           // bLength (10), bDescriptorType (String)
+    '0', 0, '0', 0, '0', 0, '1', 0
+};
+#endif
+
+void EX_USB_SetEPxHIDConfig(void)
+{
+    USB_EPX_CFG_t tEPxCfg;
+	
+#if TEST_SINGLE
+    /* EP1 IN */
+    tEPxCfg.un8Num = (g_usbHIDConfigDesc.ep_in.bEndpointAddress & 0x0F);
+    tEPxCfg.bDir = (g_usbHIDConfigDesc.ep_in.bEndpointAddress & 0x80 ? true : false);
+    tEPxCfg.un16PktSize = g_usbHIDConfigDesc.ep_in.wMaxPacketSize;
+    tEPxCfg.un8Attr = g_usbHIDConfigDesc.ep_in.bmAttributes;
+    
+    HAL_USB_SetEPxConfig(USB_ID_0, &tEPxCfg);
+    
+    /* EP1 OUT */    
+    tEPxCfg.un8Num = (g_usbHIDConfigDesc.ep_out.bEndpointAddress & 0x0F);
+    tEPxCfg.bDir = (g_usbHIDConfigDesc.ep_out.bEndpointAddress & 0x80 ? true : false);
+    tEPxCfg.un16PktSize = g_usbHIDConfigDesc.ep_out.wMaxPacketSize;
+    tEPxCfg.un8Attr = g_usbHIDConfigDesc.ep_out.bmAttributes;
+    
+    HAL_USB_SetEPxConfig(USB_ID_0, &tEPxCfg);
+#else
+    /* EP2 IN */
+    tEPxCfg.un8Num = (g_usbCompositeConfigDesc.hid_ep_in.bEndpointAddress & 0x0F);
+    tEPxCfg.bDir = (g_usbCompositeConfigDesc.hid_ep_in.bEndpointAddress & 0x80 ? true : false);
+    tEPxCfg.un16PktSize = g_usbCompositeConfigDesc.hid_ep_in.wMaxPacketSize;
+    tEPxCfg.un8Attr = g_usbCompositeConfigDesc.hid_ep_in.bmAttributes;
+    
+    HAL_USB_SetEPxConfig(USB_ID_0, &tEPxCfg);
+    
+    /* EP2 OUT */    
+    tEPxCfg.un8Num = (g_usbCompositeConfigDesc.hid_ep_out.bEndpointAddress & 0x0F);
+    tEPxCfg.bDir = (g_usbCompositeConfigDesc.hid_ep_out.bEndpointAddress & 0x80 ? true : false);
+    tEPxCfg.un16PktSize = g_usbCompositeConfigDesc.hid_ep_out.wMaxPacketSize;
+    tEPxCfg.un8Attr = g_usbCompositeConfigDesc.hid_ep_out.bmAttributes;
+    
+    HAL_USB_SetEPxConfig(USB_ID_0, &tEPxCfg);
+#endif
+
+}
+
+void EX_USB_SetEPxCDCConfig(void)
+{
+    USB_EPX_CFG_t tEPxCfg;
+
+#if TEST_SINGLE
+    /* EP2 IN */
+    tEPxCfg.un8Num = (g_usbCDCConfigDesc.ep_in.bEndpointAddress & 0x0F);
+    tEPxCfg.bDir = (g_usbCDCConfigDesc.ep_in.bEndpointAddress & 0x80 ? true : false);
+    tEPxCfg.un16PktSize = g_usbCDCConfigDesc.ep_in.wMaxPacketSize;
+    tEPxCfg.un8Attr = g_usbCDCConfigDesc.ep_in.bmAttributes;
+    
+    HAL_USB_SetEPxConfig(USB_ID_0, &tEPxCfg);
+    
+    /* EP2 OUT */    
+    tEPxCfg.un8Num = (g_usbCDCConfigDesc.ep_out.bEndpointAddress & 0x0F);
+    tEPxCfg.bDir = (g_usbCDCConfigDesc.ep_out.bEndpointAddress & 0x80 ? true : false);
+    tEPxCfg.un16PktSize = g_usbCDCConfigDesc.ep_out.wMaxPacketSize;
+    tEPxCfg.un8Attr = g_usbCDCConfigDesc.ep_out.bmAttributes;
+    
+    HAL_USB_SetEPxConfig(USB_ID_0, &tEPxCfg);
+#else
+    /* EP1 IN */
+    tEPxCfg.un8Num = (g_usbCompositeConfigDesc.cdc_ep_in.bEndpointAddress & 0x0F);
+    tEPxCfg.bDir = (g_usbCompositeConfigDesc.cdc_ep_in.bEndpointAddress & 0x80 ? true : false);
+    tEPxCfg.un16PktSize = g_usbCompositeConfigDesc.cdc_ep_in.wMaxPacketSize;
+    tEPxCfg.un8Attr = g_usbCompositeConfigDesc.cdc_ep_in.bmAttributes;
+    
+    HAL_USB_SetEPxConfig(USB_ID_0, &tEPxCfg);
+    
+    /* EP1 OUT */    
+    tEPxCfg.un8Num = (g_usbCompositeConfigDesc.cdc_ep_out.bEndpointAddress & 0x0F);
+    tEPxCfg.bDir = (g_usbCompositeConfigDesc.cdc_ep_out.bEndpointAddress & 0x80 ? true : false);
+    tEPxCfg.un16PktSize = g_usbCompositeConfigDesc.cdc_ep_out.wMaxPacketSize;
+    tEPxCfg.un8Attr = g_usbCompositeConfigDesc.cdc_ep_out.bmAttributes;
+    
+    HAL_USB_SetEPxConfig(USB_ID_0, &tEPxCfg);
+#endif
+
+}
+
+void EX_USB_EP0_Stall(void)
+{
+    s_ep0Tx.pBuf    = NULL;
+    s_ep0Tx.total   = 0;
+    s_ep0Tx.sent    = 0;
+    s_ep0Tx.needZlp = false;
+
+    HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SENDSTALL | USB_EP0_CTRL_DATAEND);
+}
+
+void EX_USB_EP0_SendZLP(void)
+{
+    s_ep0Tx.pBuf   = NULL;
+    s_ep0Tx.total  = 0;
+    s_ep0Tx.sent   = 0;
+    s_ep0Tx.needZlp = false;
+
+    HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_INPKTRDY | USB_EP0_CTRL_DATAEND);
+}
+
+static void EX_USB_EP0_TxContinue(void)
+{
+    uint16_t remain = s_ep0Tx.total - s_ep0Tx.sent;
+    uint16_t pktLen = (remain > USB_EP0_MAX_PKT_SIZE) ? USB_EP0_MAX_PKT_SIZE : remain;
+
+    if (pktLen > 0)
+    {
+        HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SRVOUTPKTRDY);
+
+        HAL_USB_SetEPxFifo(USB_ID_0, 0, &s_ep0Tx.pBuf[s_ep0Tx.sent], pktLen);
+        USB_LOG("[S]Send End\n");
+        s_ep0Tx.sent += pktLen;
+
+        if (s_ep0Tx.sent >= s_ep0Tx.total)
+        {
+            HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_INPKTRDY | USB_EP0_CTRL_DATAEND);
+        }
+        else
+        {
+            HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_INPKTRDY);
+        }
+    }
+}
+
+static void EX_USB_EP0_RxContinue(void)
+{
+    uint16_t remain = s_ep0Rx.total - s_ep0Rx.recv;
+    uint16_t pktLen = (remain > USB_EP0_MAX_PKT_SIZE) ? USB_EP0_MAX_PKT_SIZE : remain;
+    uint16_t rxLen = 0;
+
+    if (pktLen > 0)
+    {
+        HAL_USB_GetEPxFifoCount(USB_ID_0, 0, &rxLen);
+
+        if (rxLen > pktLen)
+            rxLen = pktLen;
+
+        HAL_USB_GetEPxFifo(USB_ID_0, 0, &s_ep0Rx.pBuf[s_ep0Rx.recv], rxLen);
+
+        s_ep0Rx.recv += rxLen;
+    }
+
+    if (s_ep0Rx.recv >= s_ep0Rx.total)
+    {
+        USB_LOG("[S] End Rx!\n");
+        HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SRVOUTPKTRDY | USB_EP0_CTRL_DATAEND);
+    }
+    else
+    {
+        HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SRVOUTPKTRDY);
+    }
+}
+
+static void EX_USB_EP0_TxStart(const uint8_t *pData, uint16_t length)
+{
+    if ((pData == NULL) || (length == 0))
+    {
+        HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_INPKTRDY | USB_EP0_CTRL_DATAEND);
+        return;
+    }
+
+    s_ep0Tx.pBuf  = pData;
+    s_ep0Tx.total = length;
+    s_ep0Tx.sent  = 0;
+
+    s_ep0Tx.needZlp = ((length % USB_EP0_MAX_PKT_SIZE) == 0);
+
+    EX_USB_EP0_TxContinue();
+}
+
+static void EX_USB_EP0_RxStart(uint8_t *pData, uint16_t length)
+{
+    if ((pData == NULL) || (length == 0))
+    {
+        HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_INPKTRDY | USB_EP0_CTRL_DATAEND);
+        return;
+    }
+
+    s_ep0Rx.pBuf  = pData;
+    s_ep0Rx.total = length;
+    s_ep0Rx.recv  = 0;
+
+    EX_USB_EP0_RxContinue();
+}
+
+static USB_EP0_Response_t EX_USB_GetStrDesc(const USB_SetupPkt_t *pPkt)
+{
+    USB_EP0_Response_t tResp = { USB_EP0_RESP_STALL, NULL, 0 };
+    uint8_t *pStr = NULL;
+
+    switch(pPkt->un16Val & 0xFF)
+    {
+        case USB_STRTYPE_LANG: pStr = (uint8_t *)&usb_string_langid;      break;
+        case USB_STRTYPE_PRD:  pStr = (uint8_t *)&usb_string_hid_product; break;
+        case USB_STRTYPE_VND:  pStr = (uint8_t *)&usb_string_vendor;      break;
+        case USB_STRTYPE_SN:   pStr = (uint8_t *)&usb_string_serial;      break;
+    }
+
+    if (pStr)
+    {
+        tResp.type   = USB_EP0_RESP_IN;
+        tResp.pData  = pStr;
+        uint8_t fullLen = pStr[0];
+        tResp.length = (fullLen < pPkt->un16Len) ? fullLen : pPkt->un16Len;
+    }
+    return tResp;
+}
+
+static USB_EP0_Response_t EX_USB_GetDesc(const USB_SetupPkt_t *pPkt)
+{
+    USB_EP0_Response_t tResp = { USB_EP0_RESP_STALL, NULL, 0 };
+    uint8_t descType = (uint8_t)(pPkt->un16Val >> 8); // Descriptor Type (High Byte)
+    
+    switch(descType)
+    {
+        case USB_DESCTYPE_DEV: // 0x01: Device Descriptor
+            LOG("[S] Get Device Desc\n");
+            tResp.type   = USB_EP0_RESP_IN;
+            tResp.pData  = (uint8_t *)s_aun8DevDesc;
+            tResp.length = DEVICE_DESC_SIZE;
+            break;
+
+        case USB_DESCTYPE_CFG: // 0x02: Configuration Descriptor
+            LOG("[S] Get Config Desc\n");
+            tResp.type = USB_EP0_RESP_IN;
+#if TEST_SINGLE
+#if (USB_CLASS_TYPE == 1) // CDC
+            tResp.pData  = (uint8_t *)&g_usbCDCConfigDesc;
+            tResp.length = (pPkt->un16Len == 9) ? 9 : sizeof(g_usbCDCConfigDesc);
+#elif (USB_CLASS_TYPE == 2) // HID
+            tResp.pData  = (uint8_t *)&g_usbHIDConfigDesc;
+            tResp.length = (pPkt->un16Len == 9) ? 9 : sizeof(g_usbHIDConfigDesc);
+#endif
+#else
+            tResp.pData  = (uint8_t *)&g_usbCompositeConfigDesc;
+            tResp.length = (pPkt->un16Len == 9) ? 9 : sizeof(g_usbCompositeConfigDesc);
+				    LOG("[S] CompositeConfig Len=%d\n", tResp.length);
+#endif
+            break;
+
+        case USB_DESCTYPE_STR: // 0x03: String Descriptor
+            LOG("[S] Get String Desc\n");
+            tResp = EX_USB_GetStrDesc(pPkt);
+            break;
+
+        case USB_DESCTYPE_HID_REPORT: // 0x22: HID Report Descriptor
+            LOG("[S] Get HID Report Desc\n");
+            tResp.type   = USB_EP0_RESP_IN;
+            tResp.pData  = (uint8_t *)g_HID_ReportDesc;
+            tResp.length = sizeof(g_HID_ReportDesc);
+            break;
+
+        default:
+            LOG("[W] Unknown Desc Type: 0x%02x\n", descType);
+            break;
+    }
+
+    if (tResp.type == USB_EP0_RESP_IN && tResp.length > pPkt->un16Len)
+    {
+        tResp.length = pPkt->un16Len;
+    }
+
+    return tResp;
+}
+
+uint8_t un8Idle = 0, un8Prot = 0;
+
+static USB_EP0_Response_t EX_USB_HandleHIDReq(USB_SetupPkt_t *pPkt)
+{
+    USB_EP0_Response_t tResp = { USB_EP0_RESP_NONE, NULL, 0 };
+
+    switch(pPkt->un8Req)
+    {
+        case HID_REQ_GET_REPORT:
+            USB_LOG("[S] GREP\n");
+            tResp.type   = USB_EP0_RESP_IN;
+            tResp.pData = (uint8_t *)&un8Prot;
+            tResp.length = 1;
+            break;
+        case HID_REQ_GET_IDLE:
+            USB_LOG("[S] GIDLE\n");
+            tResp.type   = USB_EP0_RESP_IN;
+            tResp.pData = (uint8_t *)&un8Idle;
+            tResp.length = 1;
+            break;
+        case HID_REQ_SET_REPORT:
+            USB_LOG("[S] SREP\n");
+            un8Prot = (uint8_t)(pPkt->un16Val & 0xFF);
+            tResp.type = USB_EP0_RESP_OUT;
+            tResp.pData = NULL;
+            tResp.length = pPkt->un16Len;
+            break;
+        case HID_REQ_SET_IDLE:
+            USB_LOG("[S] SIDLE\n");
+            un8Idle = (uint8_t)(pPkt->un16Val & 0xFF);
+            tResp.type = USB_EP0_RESP_NODATA;
+            break;
+        case HID_REQ_SET_PROTOCOL:
+        case HID_REQ_GET_PROTOCOL:
+        default:
+            break;
+    }
+
+    return tResp;
+}
+
+static USB_EP0_Response_t EX_USB_HandleCDCReq(USB_SetupPkt_t *pPkt)
+{
+    USB_EP0_Response_t tResp = { USB_EP0_RESP_NONE, NULL, 0 };
+
+    switch(pPkt->un8Req)
+    {
+        case CDC_REQ_SEND_ENCAPSULATED_COMMAND:
+        case CDC_REQ_GET_ENCAPSULATED_RESPONSE:
+        case CDC_REQ_SET_COMM_FEATURE:
+        case CDC_REQ_GET_COMM_FEATURE:
+        case CDC_REQ_CLEAR_COMM_FEATURE:
+            USB_LOG("[S] CETC!\n");
+            tResp.type   = USB_EP0_RESP_STATUS;
+            break;
+        case CDC_REQ_SET_LINE_CODING:
+            USB_LOG("[S] SLC!\n");
+            tResp.type = USB_EP0_RESP_STATUS;
+            break;
+        case CDC_REQ_GET_LINE_CODING:
+            USB_LOG("[S] GLC!(%d)\n",sizeof(s_tCdcLineCoding));
+            tResp.type = USB_EP0_RESP_IN;
+            tResp.pData = (uint8_t *)&s_tCdcLineCoding;
+            tResp.length = sizeof(s_tCdcLineCoding);
+            break;
+        case CDC_REQ_SET_CONTROL_LINE_STATE:
+            USB_LOG("[S] SLCS!\n");
+            tResp.type   = USB_EP0_RESP_NODATA;
+            break;
+        case CDC_REQ_SEND_BREAK:
+            break;
+        default:
+            break;
+    }
+
+    return tResp;
+}
+
+static USB_EP0_Response_t EX_USB_HandleStdReq(USB_SetupPkt_t *pPkt)
+{
+    USB_EP0_Response_t tResp = { USB_EP0_RESP_STALL, NULL, 0 };
+
+    switch(pPkt->un8Req)
+    {
+        case USB_STDREQ_DESC:
+            tResp = EX_USB_GetDesc(pPkt);
+            break;
+
+        case USB_STDREQ_ADDR:
+            s_un8FAddr = pPkt->un16Val;
+            tResp.type = USB_EP0_RESP_STATUS;
+            break;
+
+        case USB_STDREQ_SCFG:
+            tResp.type = USB_EP0_RESP_NODATA;
+#if TEST_SINGLE
+#if (USB_CLASS_TYPE == 1)
+            EX_USB_SetEPxCDCConfig();
+#else
+            EX_USB_SetEPxHIDConfig();
+#endif
+#else
+            EX_USB_SetEPxHIDConfig();
+            EX_USB_SetEPxCDCConfig();
+#endif
+            break;
+    }
+    return tResp;
+}
+
+static void EX_USB_SetSetup(USB_SetupPkt_t *pPkt)
+{
+    USB_EP0_Response_t tResp = { USB_EP0_RESP_STALL, NULL, 0 };
+
+    switch (pPkt->un8ReqType & USB_BMREQ_MASK_TYPE)
+    {
+        case USB_REQTYPE_STD:
+            tResp = EX_USB_HandleStdReq(pPkt);
+            break;
+
+        case USB_REQTYPE_CLS:
+#if TEST_SINGLE
+#if (USB_CLASS_TYPE == 1)
+            tResp = EX_USB_HandleCDCReq(pPkt);
+#elif (USB_CLASS_TYPE == 2)
+            tResp = EX_USB_HandleHIDReq(pPkt);
+#endif
+#else
+            {
+                uint8_t interfaceNum = (uint8_t)(pPkt->un16Idx & 0xFF);
+
+                if (interfaceNum == 0) 
+                {
+                    USB_LOG("[S] HID Class Req (IF 0)\n");
+                    tResp = EX_USB_HandleHIDReq(pPkt);
+                } 
+                else if (interfaceNum == 1 || interfaceNum == 2) 
+                {
+                    USB_LOG("[S] CDC Class Req (IF %d)\n");
+                    tResp = EX_USB_HandleCDCReq(pPkt);
+                }
+                else 
+                {
+                    USB_LOG("[E] Unknown Interface: %d\n", interfaceNum);
+                    tResp.type = USB_EP0_RESP_STALL;
+                }
+						}
+#endif
+
+            break;
+
+        case USB_REQTYPE_VND:
+            USB_LOG("[S] Vendor Req - Not Supported\n");
+            break;
+    }
+
+    switch (tResp.type)
+    {
+        case USB_EP0_RESP_IN:
+            EX_USB_EP0_TxStart(tResp.pData, tResp.length);
+            break;
+
+        case USB_EP0_RESP_OUT:
+            EX_USB_EP0_RxStart(tResp.pData, tResp.length);
+            break;
+
+        case USB_EP0_RESP_STATUS:
+            HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SRVOUTPKTRDY);
+            break;
+
+        case USB_EP0_RESP_NODATA:
+            HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SRVOUTPKTRDY | USB_EP0_CTRL_DATAEND);
+            break;
+
+        case USB_EP0_RESP_NONE:
+            EX_USB_EP0_SendZLP();
+            break;
+
+        case USB_EP0_RESP_STALL:
+        default:
+            USB_LOG("[E] Request Stalled: Req=0x%x\n", pPkt->un8Req);
+            EX_USB_EP0_Stall();
+            break;
+    }
+}
+
+static void PRV_USB_HandleEPOut(uint32_t un32Event)
+{
+    uint16_t un16FifoCount = 0;
+    uint8_t un8RxBuf[64];
+    uint8_t un8EpNum = 31 - __clz(un32Event);
+
+    HAL_USB_GetEPxFifoCount(USB_ID_0, un8EpNum, &un16FifoCount);
+    
+    if (un16FifoCount > sizeof(un8RxBuf)) un16FifoCount = sizeof(un8RxBuf);
+
+    HAL_USB_GetEPxFifo(USB_ID_0, un8EpNum, un8RxBuf, un16FifoCount);
+
+    LOG("EP%d RX (%d bytes): ", un8EpNum, un16FifoCount);
+    for (int i = 0; i < un16FifoCount; i++)
+    {
+        LOG("%02X ", un8RxBuf[i]);
+    }
+    LOG("\n");
+}
+
+#if 0
+static void PRV_USB_HandleEP0(uint32_t un32Event)
+{
+    USB_SetupPkt_t tSetup;
+    uint16_t un16FifoCount = 0;
+
+    LOG("EP0Evt:0x%x\n",un32Event);
+
+    if (un32Event == 0)
+    {
+        if (s_ep0Tx.total - s_ep0Tx.sent > 0)
+        {
+            EX_USB_EP0_TxContinue();
+        }
+    }
+
+    if (s_un8FAddr != 0) {
+        HAL_USB_SetAddress(USB_ID_0, s_un8FAddr);
+        s_un8FAddr = 0;
+        USB_LOG("[S] Address Set\n");
+    }
+
+    if (un32Event & USB_EP0_EVENT_SENTSTALL) 
+    {
+        HAL_USB_SetEPxControl(USB_ID_0, 0, 0);
+    }
+    if (un32Event & USB_EP0_EVENT_SETUPEND) 
+    {
+        HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SRVSETUPEND);
+    }
+
+    if (un32Event & USB_EP0_EVENT_OUTPKTRDY) 
+    {
+        HAL_USB_GetEPxFifoCount(USB_ID_0, 0, &un16FifoCount);
+        
+        if (un16FifoCount == 8)
+        {
+            HAL_USB_GetEPxFifo(USB_ID_0, 0, (uint8_t *)&tSetup, 8);
+            LOG("S-T:[0x%x]|[R:0x%x]|[V:0x%x]\n",tSetup.un8ReqType, tSetup.un8Req, tSetup.un16Val);
+            EX_USB_SetSetup(&tSetup);
+        } 
+        else if (un16FifoCount == 7) 
+        {
+            EX_USB_EP0_RxStart((uint8_t *)&s_tCdcLineCoding, sizeof(s_tCdcLineCoding));
+        } 
+        else 
+        {
+            HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SRVOUTPKTRDY | USB_EP0_CTRL_DATAEND);
+        }
+    }
+}
+#else
+static void PRV_USB_HandleEP0(uint32_t un32Event)
+{
+    USB_SetupPkt_t tSetup;
+    uint16_t un16FifoCount = 0;
+
+    LOG("EP0Evt:0x%x\n",un32Event);
+
+    if (un32Event == 0 && s_bFaddr == true)
+    {
+        if (USBD_P_EP[0]) USBD_P_EP[0](USBD_EVT_IN);
+#if 0
+        if (s_ep0Tx.total - s_ep0Tx.sent > 0)
+        {
+            EX_USB_EP0_TxContinue();
+        }
+#endif
+    }
+
+    if (s_un8FAddr != 0) {
+        HAL_USB_SetAddress(USB_ID_0, s_un8FAddr);
+        s_un8FAddr = 0;
+        USB_LOG("[S] Address Set\n");
+        s_bFaddr = true;
+    }
+
+    if (un32Event & USB_EP0_EVENT_SENTSTALL) 
+    {
+        HAL_USB_SetEPxControl(USB_ID_0, 0, 0);
+    }
+    if (un32Event & USB_EP0_EVENT_SETUPEND) 
+    {
+        HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SRVSETUPEND);
+    }
+
+    if (un32Event & USB_EP0_EVENT_OUTPKTRDY) 
+    {
+        if (USBD_P_EP[0]) USBD_P_EP[0](USBD_EVT_SETUP);
+#if 0
+        HAL_USB_GetEPxFifoCount(USB_ID_0, 0, &un16FifoCount);
+        
+        if (un16FifoCount == 8)
+        {
+            HAL_USB_GetEPxFifo(USB_ID_0, 0, (uint8_t *)&tSetup, 8);
+            LOG("S-T:[0x%x]|[R:0x%x]|[V:0x%x]\n",tSetup.un8ReqType, tSetup.un8Req, tSetup.un16Val);
+            if (tSetup.un8ReqType == 0 && tSetup.un8Req == 0x05)
+                EX_USB_SetSetup(&tSetup);
+            else
+                if (USBD_P_EP[0]) USBD_P_EP[0](USBD_EVT_SETUP);
+        } 
+#endif
+    }
+}
+#endif
+
+/*
+ *  USB Device Interrupt enable
+ *   Called by USBD_Init to enable the USB Interrupt
+ *    Return Value:    None
+ */
+
+#ifdef __RTX
+void __svc(1) USBD_IntrEna(void);
+void __SVC_1(void)
+{
+#else
+void          USBD_IntrEna(void)
+{
+#endif
+    HAL_USB_SetIRQ(USB_ID_0, USB_OPS_INTR, USB_HW_IRQHandler, NULL, 3, false);
+}
+
+/*
+ *  USB Device Initialize Function
+ *   Called by the User to initialize USB
+ *    Return Value:    None
+ */
+
+/* Done 1st */
+void USBD_Init(void)
+{
+    USB_CLK_CFG_t tClkCfg =
+    {
+        .eClk = USB_CLK_MCCR,
+        .eMccr = USB_CLK_MCCR_PLL,
+        .un8MccrDiv = 1,
+    };
+#if 0
+    (void)HAL_PCU_SetAltMode(PCU_ID_C, PCU_PIN_ID_14, PCU_ALT_4);
+    (void)HAL_PCU_SetAltMode(PCU_ID_C, PCU_PIN_ID_15, PCU_ALT_4);
+    HAL_PCU_SetInOutMode(PCU_ID_B, PCU_PIN_ID_8, PCU_INOUT_OUTPUT_PUSH_PULL);
+    HAL_PCU_SetOutputBit(PCU_ID_B, PCU_PIN_ID_8, PCU_OUTPUT_BIT_SET);
+    HAL_PCU_SetAltMode(PCU_ID_B, PCU_PIN_ID_8, PCU_ALT_0);
+#endif
+
+    USBD_HighSpeed = __TRUE;
+		
+    s_un8FAddr = 0;
+    HAL_USB_Init(USB_ID_0);
+    HAL_USB_SetClkConfig(USB_ID_0, &tClkCfg);
+    HAL_USB_SetConfig(USB_ID_0, NULL);
+    HAL_USB_SetIRQ(USB_ID_0, USB_OPS_INTR, USB_HW_IRQHandler, NULL, 0, false);
+    LOG("Init USB Done!\n");
+}
+
+
+/*
+ *  USB Device Connect Function
+ *   Called by the User to Connect/Disconnect USB Device
+ *    Parameters:      con:   Connect/Disconnect
+ *    Return Value:    None
+ */
+
+/* Done 1st */
+void USBD_Connect(BOOL con)
+{
+    //HAL_USB_SetConnect(USB_ID_0, con);
+}
+
+
+/*
+ *  USB Device Reset Function
+ *   Called automatically on USB Device Reset
+ *    Return Value:    None
+ */
+
+/* Done 1st */
+void USBD_Reset(void)
+{
+#if 0
+    HAL_USB_SetIRQ(USB_ID_0, USB_OPS_POLL, NULL, NULL, 0, false);
+    HAL_USB_SetEPxControl(USB_ID_0, 0, 0x00);
+    HAL_USB_SetAddress(USB_ID_0, 0x00);
+    HAL_USB_SetIRQ(USB_ID_0, USB_OPS_INTR, USB_HW_IRQHandler, NULL, 3, false);
+#endif
+    s_un8FAddr = 0;
+    HAL_USB_SetConnect(USB_ID_0, true);
+    s_bFaddr = false;
+    LOG("Reset USB!\n");
+}
+
+
+/*
+ *  USB Device Suspend Function
+ *   Called automatically on USB Device Suspend
+ *    Return Value:    None
+ */
+
+/* no impl */
+void USBD_Suspend(void)
+{
+    //HAL_USB_SetCommonControl(USB_ID_0, USB_CM_CTRL_SUSPEND);
+}
+
+
+/*
+ *  USB Device Resume Function
+ *   Called automatically on USB Device Resume
+ *    Return Value:    None
+ */
+
+/* no impl */
+void USBD_Resume(void)
+{
+    /* Performed by Hardware                                                    */
+}
+
+
+/*
+ *  USB Device Remote Wakeup Function
+ *   Called automatically on USB Device Remote Wakeup
+ *    Return Value:    None
+ */
+
+/* no impl */
+void USBD_WakeUp(void)
+{
+    //HAL_USB_SetCommonControl(USB_ID_0, USB_CM_CTRL_RESUME | USB_CM_CTRL_SUSPEND);
+    //SystemDelayMS(3); /* almost 10ms */
+    //HAL_USB_SetCommonControl(USB_ID_0, USB_CM_CTRL_SUSPEND);
+}
+
+
+/*
+ *  USB Device Remote Wakeup Configuration Function
+ *    Parameters:      cfg:   Device Enable/Disable
+ *    Return Value:    None
+ */
+
+/* no impl */
+void USBD_WakeUpCfg(BOOL cfg)
+{
+    /* Not needed                                                               */
+}
+
+
+/*
+ *  USB Device Set Address Function
+ *    Parameters:      adr:   USB Device Address
+ *                     setup: Called in setup stage (!=0), else after status stage
+ *    Return Value:    None
+ */
+
+/* Done 1st */
+void USBD_SetAddress(U32 adr, U32 setup)
+{
+#if 0
+    if (setup) {
+        return;
+    }
+#endif
+    LOG("SetAddr=0x%x\n",adr);
+    s_un8FAddr = adr;
+    //HAL_USB_SetAddress(USB_ID_0, adr);
+    //HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SRVOUTPKTRDY);
+}
+
+
+/*
+ *  USB Device Configure Function
+ *    Parameters:      cfg:   Device Configure/Deconfigure
+ *    Return Value:    None
+ */
+
+/* Need? */
+void USBD_Configure(BOOL cfg)
+{
+}
+
+
+/*
+ *  Configure USB Device Endpoint according to Descriptor
+ *    Parameters:      pEPD:  Pointer to Device Endpoint Descriptor
+ *    Return Value:    None
+ */
+
+/* Done 1st */
+void USBD_ConfigEP(USB_ENDPOINT_DESCRIPTOR *pEPD)
+{
+    /* Double Buffering is not yet supported                                    */
+    USB_EPX_CFG_t tEPxCfg;
+
+    
+    tEPxCfg.un8Num = pEPD->bEndpointAddress & 0x0F; 
+    tEPxCfg.un16PktSize = pEPD->wMaxPacketSize;
+    tEPxCfg.bDir = (pEPD->bEndpointAddress & 0x80 ? true : false); 
+    tEPxCfg.un8Attr = pEPD->bmAttributes;
+
+    LOG("EPSetup:0x%x:0x%x:0x%x|0x%x|0x%x\n",tEPxCfg.un8Num, tEPxCfg.un16PktSize, tEPxCfg.bDir, tEPxCfg.un8Attr, pEPD->bInterval);
+    HAL_USB_SetEPxConfig(USB_ID_0, &tEPxCfg);
+}
+
+
+/*
+ *  Set Direction for USB Device Control Endpoint
+ *    Parameters:      dir:   Out (dir == 0), In (dir <> 0)
+ *    Return Value:    None
+ */
+
+void USBD_DirCtrlEP(U32 dir)
+{
+    if (ep0_setup_processing)
+    {
+        if (dir == REQUEST_HOST_TO_DEVICE)
+        {
+            ep0_h2d_candidate = 1;
+        }
+        else
+        {
+            ep0_h2d_candidate = 0;
+            ep0_wait_data_out = 0;
+        }
+    }
+
+    /* Not needed                                                               */
+}
+
+
+/*
+ *  Enable USB Device Endpoint
+ *    Parameters:      EPNum: Device Endpoint Number
+ *                       EPNum.0..3: Address
+ *                       EPNum.7:    Dir
+ *    Return Value:    None
+ */
+
+/* Need? */
+void USBD_EnableEP(U32 EPNum)
+{
+}
+
+
+/*
+ *  Disable USB Endpoint
+ *    Parameters:      EPNum: Endpoint Number
+ *                       EPNum.0..3: Address
+ *                       EPNum.7:    Dir
+ *    Return Value:    None
+ */
+
+/* Need? */
+void USBD_DisableEP(U32 EPNum)
+{
+}
+
+
+/*
+ *  Reset USB Device Endpoint
+ *    Parameters:      EPNum: Device Endpoint Number
+ *                       EPNum.0..3: Address
+ *                       EPNum.7:    Dir
+ *    Return Value:    None
+ */
+
+/* Need? */
+void USBD_ResetEP(U32 EPNum)
+{
+}
+
+
+/*
+ *  Set Stall for USB Device Endpoint
+ *    Parameters:      EPNum: Device Endpoint Number
+ *                       EPNum.0..3: Address
+ *                       EPNum.7:    Dir
+ *    Return Value:    None
+ */
+
+/* Stall? */
+void USBD_SetStallEP(U32 EPNum)
+{
+    USB_LOG("SetStallEP\n");
+
+    HAL_USB_SetEPxControl(USB_ID_0, EPNum, USB_EP0_CTRL_SENDSTALL);
+
+    if ((EPNum == 0x00U) || (EPNum == 0x80U))
+    {
+        ep0_setup_stalled = 1;
+        ep0_h2d_candidate = 0;
+        ep0_wait_data_out = 0;
+    }
+}
+
+
+/*
+ *  Clear Stall for USB Device Endpoint
+ *    Parameters:      EPNum: Device Endpoint Number
+ *                       EPNum.0..3: Address
+ *                       EPNum.7:    Dir
+ *    Return Value:    None
+ */
+/* Clear Stall? */
+void USBD_ClrStallEP(U32 EPNum)
+{
+    USB_LOG("ClearStallEP\n");
+    HAL_USB_SetEPxControl(USB_ID_0, EPNum, USB_EP0_CTRL_SRVOUTPKTRDY | USB_EP0_CTRL_SRVSETUPEND);
+}
+
+
+/*
+ *  Clear USB Device Endpoint Buffer
+ *    Parameters:      EPNum: Device Endpoint Number
+ *                       EPNum.0..3: Address
+ *                       EPNum.7:    Dir
+ *    Return Value:    None
+ */
+
+void USBD_ClearEPBuf(U32 EPNum)
+{
+}
+
+
+/*
+ *  Read USB Device Endpoint Data
+ *    Parameters:      EPNum: Device Endpoint Number
+ *                       EPNum.0..3: Address
+ *                       EPNum.7:    Dir
+ *                     pData: Pointer to Data Buffer
+ *    Return Value:    Number of bytes read
+ */
+
+/* Done 1st */
+U32 USBD_ReadEP(U32 EPNum, U8 *pData, U32 bufsz)
+{
+    uint8_t un8EpNum = (uint8_t)(EPNum & 0x0F);
+    uint32_t un32FifoCnt = 0;
+
+    HAL_USB_GetEPxFifoCount(USB_ID_0, un8EpNum, (uint16_t *)&un32FifoCnt);
+    if (un32FifoCnt > bufsz)
+    {
+        un32FifoCnt = bufsz; 
+    }
+
+    HAL_USB_GetEPxFifo(USB_ID_0, un8EpNum, pData, (uint8_t)un32FifoCnt);
+
+    if (un8EpNum == 0) 
+    {
+        HAL_USB_SetEPxControl(USB_ID_0, un8EpNum, USB_EP0_CTRL_SRVOUTPKTRDY);
+#if 1
+        if (un32FifoCnt == 8)
+        {
+            USB_LOG("0x%x|0x%x|0x%x\n", pData[0], pData[1], (pData[3] << 8 | pData[2]));
+        }
+#endif
+    }
+    else
+    {
+#if 0
+        if (un8EpNum == 1)
+            PB->BSR = 1 << 8;
+#endif
+
+#if 0
+        uint32_t un32Reg;
+        HAL_USB_GetEPxOutControl(USB_ID_0, un8EpNum, &un32Reg);
+
+        un32Reg &= ~USB_EPX_OUT_CTRL_OUTPKTRDY;
+        un32Reg &= ~USB_EPX_OUT_CTRL_FLUSHFIFO;
+        un32Reg &= ~USB_EPX_OUT_CTRL_SENDSTALL;
+        un32Reg &= ~USB_EPX_OUT_CTRL_CLRDATATOG;
+
+        HAL_USB_SetEPxOutControl(USB_ID_0, un8EpNum, un32Reg);
+#else
+        HAL_USB_SetEPxOutControl(USB_ID_0, un8EpNum, USB_EPX_OUT_CTRL_OUTPKTRDY | USB_EPX_OUT_CTRL_FLUSHFIFO);
+#endif        
+
+        //HAL_USB_SetEPxOutControl(USB_ID_0, un8EpNum, USB_EPX_OUT_CTRL_OUTPKTRDY | USB_EPX_OUT_CTRL_FLUSHFIFO);
+    }
+
+    return (un32FifoCnt);
+}
+
+
+/*
+ *  Write USB Device Endpoint Data
+ *    Parameters:      EPNum: Device Endpoint Number
+ *                       EPNum.0..3: Address
+ *                       EPNum.7:    Dir
+ *                     pData: Pointer to Data Buffer
+ *                     cnt:   Number of bytes to write
+ *    Return Value:    Number of bytes written
+ */
+
+extern USB_SETUP_PACKET USBD_SetupPacket;
+extern USBD_EP_DATA USBD_EP0Data;
+
+U32 USBD_WriteEP(U32 EPNum, U8 *pData, U32 cnt)
+{
+    uint8_t un8EpNum = EPNum & 0x0F;
+	
+    if (un8EpNum == 0)
+    {
+        if (cnt == 0)
+        {
+        if (ep0_setup_processing)
+        {
+            HAL_USB_SetEPxControl(USB_ID_0, un8EpNum, USB_EP0_CTRL_SRVOUTPKTRDY | USB_EP0_CTRL_DATAEND);
+        }
+        else
+        {
+            HAL_USB_SetEPxControl(USB_ID_0, un8EpNum, USB_EP0_CTRL_INPKTRDY | USB_EP0_CTRL_DATAEND);
+        }
+        ep0_status_in_zlp = 1;
+        ep0_wait_data_out = 0;
+        return (cnt);
+        }
+    }
+    else
+    {
+        if (cnt == 0)
+        {
+            HAL_USB_SetEPxControl(USB_ID_0, un8EpNum, USB_EPX_CTRL_FLUSHFIFO);
+            return (cnt);
+        }
+        
+    }
+
+    if (un8EpNum == 1)
+        PB->BCR = 1 << 8;
+
+    HAL_USB_SetEPxFifo(USB_ID_0, un8EpNum, pData, cnt);
+#if DUMP
+    for(int i = 0; i < cnt; i++)
+        LOG("0x%x,",pData[i]);
+#endif
+    if (un8EpNum == 0)
+    {
+        uint32_t un32Flag = USB_EP0_CTRL_INPKTRDY;
+			
+        USB_LOG("EP0Data.Count %d:cnt %d\n",USBD_EP0Data.Count, cnt);
+        if (*(volatile uint32_t *)&USBD_EP0Data.Count == cnt)
+        {
+            un32Flag |= USB_EP0_CTRL_DATAEND;
+        }
+
+        HAL_USB_SetEPxControl(USB_ID_0, un8EpNum, un32Flag);
+
+        USB_LOG("EP0Data.Count %d:cnt %d:flag 0x%x\n",USBD_EP0Data.Count, cnt, un32Flag);
+    }
+    else
+    {
+        USB_LOG("EPx cnt=%d\n",cnt);
+        HAL_USB_SetEPxControl(USB_ID_0, un8EpNum, USB_EPX_CTRL_INPKTRDY);
+        USB_LOG("EPx WriteEnd!\n");
+    }
+
+#if 0
+    if (un8EpNum == 1)
+        PB->BSR = 1 << 8;
+#endif
+
+    return (cnt);
+}
+
+/*
+ *  Get USB Device Last Frame Number
+ *    Parameters:      None
+ *    Return Value:    Frame Number
+ */
+
+/* no impl */
+U32 USBD_GetFrame(void)
+{
+    return 0;
+}
+
+
+#ifdef __RTX
+U32 LastError;                          /* Last Error                         */
+
+/*
+ *  Get USB Last Error Code
+ *    Parameters:      None
+ *    Return Value:    Error Code
+ */
+
+U32 USBD_GetError(void)
+{
+    return (LastError);
+}
+#endif
+
+
+/*
+ *  USB Device Interrupt Service Routine
+ */
+
+static void USB_HW_IRQHandler(uint32_t un32Event, void *pContext)
+{
+    NVIC_DisableIRQ(USB_IRQn);
+    USBD_SignalHandler();
+}
+
+#if 0
+static enum {
+    EP0_STAGE_SETUP,
+    EP0_STAGE_DATA_OUT
+} ep0_current_stage = EP0_STAGE_SETUP;
+#endif
+
+typedef enum {
+    EP0_STAGE_IDLE = 0,
+    EP0_STAGE_SETUP,
+    EP0_STAGE_DATA_OUT,
+    EP0_STAGE_DATA_IN,
+    EP0_STAGE_STATUS_OUT,
+    EP0_STAGE_STATUS_IN,
+} ep0_stage_t;
+
+static ep0_stage_t ep0_stage = EP0_STAGE_IDLE;
+
+void USBD_Handler(void)
+{
+    USB_EVENT_e eUsbEvt;
+    USB_Type *ptUsb = (USB_Type *)USB_BASE;
+
+    volatile uint32_t un32InEpEvent = 0, un32OutEpEvent = 0;
+    volatile uint32_t un32CommonEvent = 0, un32Ep0Event = 0;
+
+    un32CommonEvent = ptUsb->INTRUSB;
+    un32OutEpEvent = ptUsb->INTROUT1;
+    un32InEpEvent = ptUsb->INTRIN1;
+
+#if 0
+    //if (un32OutEpEvent != 0 || un32InEpEvent != 0)
+        LOG("Com=0x%x|out=0x%x|in=0x%x\n", un32CommonEvent, un32OutEpEvent, un32InEpEvent);
+#endif
+
+    if (un32InEpEvent & 0x01)
+    {
+        ptUsb->INDEX = 0;
+        un32Ep0Event = ptUsb->CSR0;
+
+       if (un32Ep0Event == 0)
+       {
+           if (USBD_P_EP[0]) USBD_P_EP[0](USBD_EVT_IN);
+       }
+
+       if (s_un8FAddr != 0) 
+       {
+           HAL_USB_SetAddress(USB_ID_0, s_un8FAddr);
+           s_un8FAddr = 0;
+           USB_LOG("[S] Address Set\n");
+       }
+
+       if (un32Ep0Event & USB_EP0_EVENT_SENTSTALL)
+       {
+           HAL_USB_SetEPxControl(USB_ID_0, 0, 0);
+       }
+
+       if (un32Ep0Event & (USB_EP0_EVENT_SETUPEND | USB_EP0_EVENT_SRVSETUPEND)) 
+       {
+           USB_LOG("Setup End!\n");
+           HAL_USB_SetEPxControl(USB_ID_0, 0, USB_EP0_CTRL_SRVSETUPEND);
+           ep0_wait_data_out = 0;
+       }
+
+       if (un32Ep0Event & (USB_EP0_EVENT_OUTPKTRDY | USB_EP0_EVENT_SRVOUTPKTRDY)) 
+       {
+#if 0
+#if 0
+           uint16_t un16FifoCnt = 0;
+           HAL_USB_GetEPxFifoCount(USB_ID_0, 0, (uint16_t *)&un16FifoCnt);
+           if (un16FifoCnt == 8)
+               if (USBD_P_EP[0]) USBD_P_EP[0](USBD_EVT_SETUP);
+           else
+               if (USBD_P_EP[0]) USBD_P_EP[0](USBD_EVT_OUT);
+#else
+           if (ep0_current_stage == EP0_STAGE_SETUP)
+           {
+               if (USBD_P_EP[0]) USBD_P_EP[0](USBD_EVT_SETUP);
+
+               if ((USBD_SetupPacket.bmRequestType.Dir == REQUEST_HOST_TO_DEVICE) && 
+                (USBD_SetupPacket.wLength > 0)) 
+               {
+                   ep0_current_stage = EP0_STAGE_DATA_OUT; 
+               }
+
+           }
+           else if (ep0_current_stage == EP0_STAGE_DATA_OUT)
+           {
+               if (USBD_P_EP[0]) USBD_P_EP[0](USBD_EVT_OUT);
+
+               if (USBD_EP0Data.Count == 0)
+                   ep0_current_stage = EP0_STAGE_SETUP;
+                      
+           }
+#endif
+#endif
+
+
+#if 1 
+    if (ep0_wait_data_out)
+    {
+        /*
+         * 직전 SETUP이 H2D data stage로 추정됨.
+         * 이번 OUTPKTRDY/SRVOUTPKTRDY는 DATA OUT.
+         */
+        ep0_wait_data_out = 0;
+
+        if (USBD_P_EP[0])
+        {
+            USBD_P_EP[0](USBD_EVT_OUT);
+        }
+    }
+    else
+    {
+        /*
+         * 기본은 SETUP으로 core에 전달.
+         */
+        ep0_setup_processing = 1;
+        ep0_h2d_candidate    = 0;
+        ep0_setup_stalled    = 0;
+        ep0_status_in_zlp    = 0;
+
+        if (USBD_P_EP[0])
+        {
+            USBD_P_EP[0](USBD_EVT_SETUP);
+        }
+
+        ep0_setup_processing = 0;
+
+        /*
+         * SETUP 처리 중:
+         * - DirCtrlEP(H2D)가 호출되었고
+         * - Stall이 없었고
+         * - EP0 IN ZLP가 바로 나가지 않았으면
+         * 다음 OUTPKTRDY는 DATA OUT으로 판단.
+         */
+        if ((ep0_h2d_candidate != 0U) &&
+            (ep0_setup_stalled == 0U) &&
+            (ep0_status_in_zlp == 0U))
+        {
+            ep0_wait_data_out = 1;
+        }
+        else
+        {
+            ep0_wait_data_out = 0;
+        }
+    }
+
+#endif
+       }
+
+       if (un32Ep0Event & USB_EP0_EVENT_INPKTRDY) 
+       {
+           if (USBD_P_EP[0]) USBD_P_EP[0](USBD_EVT_IN);
+       }
+    }
+    
+    if (un32CommonEvent != 0) 
+    {
+        if (un32CommonEvent & USB_CM_EVENT_RESET) 
+        {
+            USBD_Reset();
+            if (USBD_P_Reset_Event) USBD_P_Reset_Event();
+        }
+
+        if (un32CommonEvent & USB_CM_EVENT_SUSPEND) 
+        {
+            if (USBD_P_Suspend_Event) USBD_P_Suspend_Event();
+        }
+
+        if (un32CommonEvent & USB_CM_EVENT_RESUME) 
+        {
+            if (USBD_P_Resume_Event) USBD_P_Resume_Event();
+        }
+#if 1
+        if (un32CommonEvent & USB_CM_EVENT_SOF) 
+        {
+            if (USBD_P_SOF_Event) USBD_P_SOF_Event();
+        }
+#endif
+    }
+
+    if (un32OutEpEvent != 0)
+    {
+        uint8_t u32Num = 31 - __clz(un32OutEpEvent);
+#if 0
+        if (u32Num == 1) {
+            PB->BCR = 1 << 8;
+            //PB->BSR = 1 << 8;
+        }
+#endif
+        if (USBD_P_EP[u32Num]) USBD_P_EP[u32Num](USBD_EVT_OUT);
+    }
+
+    if ((un32InEpEvent & 0x1E) != 0)
+    {
+        uint8_t u32Num = 31 - __clz(un32InEpEvent);
+        
+        ptUsb->INDEX = u32Num;
+
+        uint32_t un32InCsr = ptUsb->INCSR1;
+#if 1
+        if ((un32InCsr & 0x01) == 0)
+        {
+            //LOG("EP%d INPKTRDY is 0. Ignore Event.\n", u32Num);
+            PB->BSR = 1 << 8;
+        }
+#if 0
+        else
+        {
+            if (USBD_P_EP[u32Num]) USBD_P_EP[u32Num](USBD_EVT_IN);
+        }
+#else
+        if (USBD_P_EP[u32Num]) USBD_P_EP[u32Num](USBD_EVT_IN);
+#endif
+#else
+        if (USBD_P_EP[u32Num]) USBD_P_EP[u32Num](USBD_EVT_IN);
+#endif
+    }
+
+    NVIC_EnableIRQ(USB_IRQn);
+}
+
