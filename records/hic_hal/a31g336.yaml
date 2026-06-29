@@ -1,0 +1,60 @@
+common:
+    target:
+        - Cortex-M0
+    core:
+        - Cortex-M0
+    macros:
+        - INTERFACE_ABOV
+        - USE_HAL_DRIVER
+        - EXTRN_SUBFAMILY_A31G33x
+        - DAPLINK_HIC_ID=0x97969908  # DAPLINK_HIC_ID_STM32F103XB
+        - __packed=__packed          # Prevent redefinition of __packed with ARMCC
+        - DAPLINK_NO_ASSERT_FILENAMES
+        - OS_CLOCK=48000000
+        - TARGET_BOARD_DEBUG_ENABLE=1
+        - CONFIG_HAL_TIMER1
+        - CONFIG_HAL_USART
+        - CONFIG_HAL_USB
+    includes:
+        - source/hic_hal/abov/a31g33x
+        - source/hic_hal/abov/a31g33x/USB/Include
+        - source/hic_hal/abov/a31g33x/audk32
+        - source/hic_hal/abov/a31g33x/audk32/ProductConfig/Config
+        - source/hic_hal/abov/a31g33x/audk32/ProductConfig/A31G33x/Config
+        - source/hic_hal/abov/a31g33x/audk32/ProductConfig/A31G33x/Board
+        - source/hic_hal/abov/a31g33x/audk32/Framework/CMSIS/Core/Include
+        - source/hic_hal/abov/a31g33x/audk32/Framework/CMSIS/Device/ABOV/Include
+        - source/hic_hal/abov/a31g33x/audk32/Framework/CMSIS/Device/ABOV/HPL/Include
+        - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/Include
+        - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/HPL/Include
+        - source/hic_hal/abov/a31g33x/audk32/Platform/Library/ABOV/Debug/Include
+    sources:
+        hic_hal:
+            - source/hic_hal/abov/a31g33x
+            - source/hic_hal/abov/a31g33x/audk32/Framework/CMSIS/Device/ABOV/Source
+            - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/SCU
+            - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/PCU
+            - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/TIMER1
+            - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/USB
+            - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/HPL/NMI
+            - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/HPL/DMA
+            - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/USART
+            - source/hic_hal/abov/a31g33x/audk32/Platform/Library/ABOV/Debug/Source
+
+tool_specific:
+    uvision:
+        misc:
+            ld_flags:
+                - --predefine="-I..\..\..\source\hic_hal\abov\a31g33x"
+        sources:
+            hic_hal:
+                - source/hic_hal/abov/a31g33x/audk32/Framework/CMSIS/Device/ABOV
+    armcc:
+        misc:
+            asm_flags:
+                - --no_unaligned_access
+            c_flags:
+                - --no_unaligned_access
+        sources:
+            hic_hal:
+                - source/hic_hal/abov/a31g33x/audk32/Framework/CMSIS/Device/ABOV
