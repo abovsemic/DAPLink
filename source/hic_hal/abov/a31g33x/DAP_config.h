@@ -136,6 +136,7 @@ This information includes:
 
 ///@}
 
+#define CMSIS_DAP_PRODUCT_NAME "A-Link CMSIS-DAP"
 
 //**************************************************************************************************
 /**
@@ -345,7 +346,7 @@ __STATIC_FORCEINLINE void PIN_SWDIO_OUT_DISABLE(void)
 */
 __STATIC_FORCEINLINE uint32_t PIN_TDI_IN(void)
 {
-    return (PB->INDR >> JTAG_TDI_PIN) & 0x00000001;
+    return (PA->INDR >> JTAG_TDI_PIN) & 0x00000001;
 }
 
 /** TDI I/O pin: Set Output.
@@ -354,9 +355,9 @@ __STATIC_FORCEINLINE uint32_t PIN_TDI_IN(void)
 __STATIC_FORCEINLINE void PIN_TDI_OUT(uint32_t bit)
 {
     if (bit & 1)
-        PB->BSR = 1 << JTAG_TDI_PIN;
+        PA->BSR = 1 << JTAG_TDI_PIN;
     else
-        PB->BCR = 1 << JTAG_TDI_PIN;
+        PA->BCR = 1 << JTAG_TDI_PIN;
 }
 
 
@@ -367,7 +368,7 @@ __STATIC_FORCEINLINE void PIN_TDI_OUT(uint32_t bit)
 */
 __STATIC_FORCEINLINE uint32_t PIN_TDO_IN(void)
 {
-    return (PB->INDR >> JTAG_TDO_PIN) & 0x00000001;
+    return (PA->INDR >> JTAG_TDO_PIN) & 0x00000001;
 }
 
 
@@ -438,7 +439,11 @@ It is recommended to provide the following LEDs for status indication:
 */
 __STATIC_INLINE void LED_CONNECTED_OUT(uint32_t bit)
 {
-    /* Connected LED on/off */
+    /* Connected LED on(Low)/off(high) */
+    if (bit & 1)
+        HAL_PCU_SetOutputBit((PCU_ID_e)CONNECTED_LED_PORT, (PCU_PIN_ID_e)CONNECTED_LED_PIN, PCU_OUTPUT_BIT_SET);
+    else
+        HAL_PCU_SetOutputBit((PCU_ID_e)CONNECTED_LED_PORT, (PCU_PIN_ID_e)CONNECTED_LED_PIN, PCU_OUTPUT_BIT_CLEAR);
 }
 
 /** Debug Unit: Set status Target Running LED.
@@ -506,6 +511,8 @@ __STATIC_INLINE void DAP_SETUP(void)
     HAL_PCU_SetInOutMode((PCU_ID_e)nRESET_PIN_PORT, (PCU_PIN_ID_e)nRESET_PIN, PCU_INOUT_OUTPUT_PUSH_PULL);
 
     /* Add connected LED on */
+    HAL_PCU_SetInOutMode((PCU_ID_e)CONNECTED_LED_PORT, (PCU_PIN_ID_e)CONNECTED_LED_PIN, PCU_INOUT_OUTPUT_PUSH_PULL);
+    HAL_PCU_SetOutputBit((PCU_ID_e)CONNECTED_LED_PORT, (PCU_PIN_ID_e)CONNECTED_LED_PIN, PCU_OUTPUT_BIT_CLEAR);
 }
 
 /** Reset Target Device with custom specific I/O pin or command sequence.

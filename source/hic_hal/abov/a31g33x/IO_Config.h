@@ -39,19 +39,14 @@ COMPILER_ASSERT(DAPLINK_HIC_ID == DAPLINK_HIC_ID_STM32F103XB);
 
 //Connected LED
 
-/* PB7 */
-#define CONNECTED_LED_PORT           PCU_ID_B
-#define CONNECTED_LED_PIN            PCU_PIN_ID_7
+/* CONNECTED LED */
+#define CONNECTED_LED_PORT           PCU_ID_A
+#define CONNECTED_LED_PIN            PCU_PIN_ID_1
 #define CONNECTED_LED_PIN_Bit        0
 
-//When bootloader, disable the target port(not used)
-//#define POWER_EN_PIN_PORT            GPIOB
-//#define POWER_EN_PIN                 GPIO_PIN_15
-//#define POWER_EN_Bit                 15
-
 // nRESET OUT Pin
-#define nRESET_PIN_PORT              PCU_ID_B
-#define nRESET_PIN                   PCU_PIN_ID_0
+#define nRESET_PIN_PORT              PCU_ID_A
+#define nRESET_PIN                   PCU_PIN_ID_5
 #define nRESET_PIN_Bit               0
 
 //SWD 
@@ -68,32 +63,17 @@ COMPILER_ASSERT(DAPLINK_HIC_ID == DAPLINK_HIC_ID_STM32F103XB);
 #define SWDIO_IN_PIN_Bit             0
 
 //JTAG
-#define JTAG_TDO_PIN_PORT           PCU_ID_B
-#define JTAG_TDO_PIN                PCU_PIN_ID_2
-#define JTAG_TDO_PIN_Bit            0
+#define JTAG_TDO_PIN_PORT            PCU_ID_A
+#define JTAG_TDO_PIN                 PCU_PIN_ID_6
+#define JTAG_TDO_PIN_Bit             0
 
-#define JTAG_TDI_PIN_PORT           PCU_ID_B
-#define JTAG_TDI_PIN                PCU_PIN_ID_1
-#define JTAG_TDI_PIN_Bit            0
+#define JTAG_TDI_PIN_PORT            PCU_ID_A
+#define JTAG_TDI_PIN                 PCU_PIN_ID_7
+#define JTAG_TDI_PIN_Bit             0
 
-//LEDs
-//USB status LED
-//#define RUNNING_LED_PORT             GPIOB
-//#define RUNNING_LED_PIN              GPIO_PIN_12
-//#define RUNNING_LED_Bit              12
-
-/* PB10 */
-#define PIN_HID_LED_PORT             PCU_ID_B
-#define PIN_HID_LED                  PCU_PIN_ID_13
+/* HID LED */
+#define PIN_HID_LED_PORT             PCU_ID_A
+#define PIN_HID_LED                  PCU_PIN_ID_0
 #define PIN_HID_LED_Bit              0
-
-//#define PIN_CDC_LED_PORT             GPIOB
-//#define PIN_CDC_LED                  GPIO_PIN_13
-//#define PIN_CDC_LED_Bit              13
-
-//#define PIN_MSC_LED_PORT             GPIOB
-//#define PIN_MSC_LED                  GPIO_PIN_12
-//#define PIN_MSC_LED_Bit              12
-
 
 #endif

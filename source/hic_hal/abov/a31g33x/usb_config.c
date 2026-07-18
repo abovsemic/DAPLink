@@ -55,7 +55,7 @@
 #define USBD_POWER                  0
 #define USBD_MAX_PACKET0            64
 #define USBD_DEVDESC_IDVENDOR       0x1A29	//ABOV		0x0D28
-#define USBD_DEVDESC_IDPRODUCT      0xA807	//A-Link	0x0204
+#define USBD_DEVDESC_IDPRODUCT      0xA808	//A-Link	0x0204
 #define USBD_DEVDESC_BCDDEVICE      0x0100
 
 //   <h> Configuration Settings
@@ -90,9 +90,9 @@
 //     </e>
 //   </h>
 #define USBD_STRDESC_LANGID         0x0409
-#define USBD_STRDESC_MAN            L"Arm"
+#define USBD_STRDESC_MAN            L"ABOV"
 #ifndef USB_PROD_STR
-#define USBD_STRDESC_PROD           L"DAPLink CMSIS-DAP"
+#define USBD_STRDESC_PROD           L"A-Link CMSIS-DAP"
 #else
 #define _TOWIDE(x)                   L ## #x
 #define TOWIDE(x)                   _TOWIDE(x)
