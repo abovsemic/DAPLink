@@ -49,6 +49,10 @@ void gpio_init(void)
     HAL_PCU_SetInOutMode((PCU_ID_e)PIN_HID_LED_PORT, (PCU_PIN_ID_e)PIN_HID_LED, PCU_INOUT_OUTPUT_PUSH_PULL);
     HAL_PCU_SetOutputBit((PCU_ID_e)PIN_HID_LED_PORT, (PCU_PIN_ID_e)PIN_HID_LED, PCU_OUTPUT_BIT_SET);
 
+    /* CDC LED */
+    HAL_PCU_SetInOutMode((PCU_ID_e)PIN_CDC_LED_PORT, (PCU_PIN_ID_e)PIN_CDC_LED, PCU_INOUT_OUTPUT_PUSH_PULL);
+    HAL_PCU_SetOutputBit((PCU_ID_e)PIN_CDC_LED_PORT, (PCU_PIN_ID_e)PIN_CDC_LED, PCU_OUTPUT_BIT_SET);
+
     busy_wait(1000000);
 }
 
@@ -61,6 +65,7 @@ void gpio_set_hid_led(gpio_led_state_t state)
 void gpio_set_cdc_led(gpio_led_state_t state)
 {
     // LED is active low
+    HAL_PCU_SetOutputBit((PCU_ID_e)PIN_CDC_LED_PORT, (PCU_PIN_ID_e)PIN_CDC_LED, state ? PCU_OUTPUT_BIT_CLEAR : PCU_OUTPUT_BIT_SET);
 }
 
 void gpio_set_msc_led(gpio_led_state_t state)

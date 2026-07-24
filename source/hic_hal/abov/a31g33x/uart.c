@@ -34,11 +34,11 @@
 
 // For usart
 
-#define USART_TX_PORT                 PCU_ID_A
-#define USART_TX_PIN                  PCU_PIN_ID_9
+#define USART_TX_PORT                 PCU_ID_B
+#define USART_TX_PIN                  PCU_PIN_ID_6
 
-#define USART_RX_PORT                 PCU_ID_A
-#define USART_RX_PIN                  PCU_PIN_ID_10
+#define USART_RX_PORT                 PCU_ID_B
+#define USART_RX_PIN                  PCU_PIN_ID_7
 
 #define RX_OVRF_MSG         "<DAPLink:Overflow>\n"
 #define RX_OVRF_MSG_SIZE    (sizeof(RX_OVRF_MSG) - 1)

@@ -76,4 +76,10 @@ COMPILER_ASSERT(DAPLINK_HIC_ID == DAPLINK_HIC_ID_STM32F103XB);
 #define PIN_HID_LED                  PCU_PIN_ID_0
 #define PIN_HID_LED_Bit              0
 
+
+/* CDC LED */
+#define PIN_CDC_LED_PORT             PCU_ID_A
+#define PIN_CDC_LED                  PCU_PIN_ID_0
+#define PIN_CDC_LED_Bit              0
+
 #endif
