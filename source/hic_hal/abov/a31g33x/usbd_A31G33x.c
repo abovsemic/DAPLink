@@ -659,18 +659,28 @@ void USBD_Handler(void)
 
     if (un32OutEpEvent != 0)
     {
-        uint8_t u32Num = 31 - __clz(un32OutEpEvent);
-        if (USBD_P_EP[u32Num]) USBD_P_EP[u32Num](USBD_EVT_OUT);
+        uint32_t un32OutMask = un32OutEpEvent;
+        while (un32OutMask != 0)
+        {
+            uint8_t u32Num = 31 - __clz(un32OutMask);
+            if (USBD_P_EP[u32Num]) USBD_P_EP[u32Num](USBD_EVT_OUT);
+            un32OutMask &= ~(1UL << u32Num);
+        }
     }
 
     if ((un32InEpEvent & 0x1E) != 0)
     {
-        uint8_t u32Num = 31 - __clz(un32InEpEvent);
-        
-        ptUsb->INDEX = u32Num;
+        uint32_t un32InMask = un32InEpEvent & 0x1E;
+        while (un32InMask != 0)
+        {
+            uint8_t u32Num = 31 - __clz(un32InMask);
 
-        uint32_t un32InCsr = ptUsb->INCSR1;
-        if (USBD_P_EP[u32Num]) USBD_P_EP[u32Num](USBD_EVT_IN);
+            ptUsb->INDEX = u32Num;
+
+            uint32_t un32InCsr = ptUsb->INCSR1;
+            if (USBD_P_EP[u32Num]) USBD_P_EP[u32Num](USBD_EVT_IN);
+            un32InMask &= ~(1UL << u32Num);
+        }
     }
 
     NVIC_EnableIRQ(USB_IRQn);

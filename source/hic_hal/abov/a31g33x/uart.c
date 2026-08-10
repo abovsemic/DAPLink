@@ -49,7 +49,8 @@ uint8_t write_buffer_data[BUFFER_SIZE];
 circ_buf_t read_buffer;
 uint8_t read_buffer_data[BUFFER_SIZE];
 
-uint8_t rbuf = 0, tbuf = 0; 
+volatile uint8_t rbuf = 0, tbuf = 0;
+static volatile bool tx_busy = false;
 
 static UART_Configuration configuration = {
     .Baudrate = 38400,
@@ -79,8 +80,10 @@ void CDC_USART_IRQn_Handler(uint32_t un32Event, void *pContext)
     if (un32Event & USART_EVENT_TX_DONE) {
         if (circ_buf_count_used(&write_buffer) > 0) {
             tbuf = circ_buf_pop(&write_buffer);
-            HAL_USART_Receive(USART_ID_1, &tbuf, 1, false);
-        } 
+            HAL_USART_Transmit(USART_ID_1, &tbuf, 1, false);
+        } else {
+            tx_busy = false;
+        }
     }
 }
 
@@ -89,6 +92,7 @@ static void clear_buffers(void)
 {
     circ_buf_init(&write_buffer, write_buffer_data, sizeof(write_buffer_data));
     circ_buf_init(&read_buffer, read_buffer_data, sizeof(read_buffer_data));
+    tx_busy = false;
 }
 
 int32_t uart_initialize(void)
@@ -117,7 +121,6 @@ int32_t uart_reset(void)
 
 int32_t uart_set_configuration(UART_Configuration *config)
 {
-
     USART_CFG_t tUsartCfg;
 
 
@@ -201,10 +204,16 @@ int32_t uart_write_data(uint8_t *data, uint16_t size)
 {
     uint32_t cnt = circ_buf_write(&write_buffer, data, size);
 
-    if (circ_buf_count_used(&write_buffer) > 0) {
+    // Only the USART1 IRQ can race with this check, so disable just that
+    // IRQ instead of masking all interrupts (keeps USB's higher-priority
+    // interrupt free to preempt this).
+    NVIC_DisableIRQ(USART_1_IRQ);
+    if (!tx_busy && circ_buf_count_used(&write_buffer) > 0) {
+        tx_busy = true;
         tbuf = circ_buf_pop(&write_buffer);
         HAL_USART_Transmit(USART_ID_1, &tbuf, 1, false);
     }
+    NVIC_EnableIRQ(USART_1_IRQ);
 
     return cnt;
 }
