@@ -498,8 +498,13 @@ Status LEDs. In detail the operation of Hardware I/O and LED pins are enabled an
  - for nTRST, nRESET a weak pull-up (if available) is enabled.
  - LED output pins are enabled and LEDs are turned off.
 */
+extern void SWJ_TimerInit(void);    // swj_a31g33x.c
+
 __STATIC_INLINE void DAP_SETUP(void)
 {
+    /* Free-running timer for the TIMED SWD/JTAG clock band (SW_DP_ram.c, JTAG_DP_ram.c) */
+    SWJ_TimerInit();
+
     /* Enable port clock */
     /* Configure I/O pin SWCLK */
     HAL_PCU_SetInOutMode((PCU_ID_e)SWCLK_TCK_PIN_PORT, (PCU_PIN_ID_e)SWCLK_TCK_PIN, PCU_INOUT_OUTPUT_PUSH_PULL);
