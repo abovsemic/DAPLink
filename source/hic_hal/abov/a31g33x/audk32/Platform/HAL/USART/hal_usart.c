@@ -703,7 +703,7 @@ static void PRV_USART_IRQHandler(USART_ID_e eId)
         }
 #endif
     }
-    else
+
     {
 #if defined(_DMAC) && defined(DMA_USART_NUM)
 #if defined (USART_FEATURE_DMA_INTERNAL_INTERRUPT)
@@ -778,11 +778,13 @@ static void PRV_USART_IRQHandler(USART_ID_e eId)
                     SET_USART_DR(ptUsart, 0x00);
                 }
             }
-            goto done;
         }
 
         if ((un32IntStatus & USART_STATUS_TXC) && (ptUcb->eTxBusy == USART_BUSY_TX))
         {
+#if defined (USART_FEATURE_NO_NINTH_BIT_REG)
+            un16Data = 0;
+#endif
 #if defined(USART_FEATURE_MASTER_SS_PIN_BY_GPIO)
             if(ptUcb->eMode == USART_MODE_SPI && !ptUcb->bSSGenDisable)
             {
