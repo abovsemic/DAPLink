@@ -104,7 +104,7 @@ module:
     hic_a31g336: &module_hic_a31g336
         - records/rtos/rtos-cm0.yaml
         - records/hic_hal/a31g336.yaml
-        - records/usb/usb-hid.yaml
+        - records/usb/usb-bulk.yaml
 
 projects:
     # HIC bootloaders and all target interfaces

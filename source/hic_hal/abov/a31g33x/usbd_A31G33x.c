@@ -80,6 +80,20 @@ static volatile uint32_t s_un32SysTimerVal=0;
 static uint8_t s_un8FAddr = 0;
 static bool s_bFaddr = false;
 
+/* IN transfers longer than one packet (e.g. 512-byte CMSIS-DAP v2 bulk response):
+ * the endpoint FIFO holds one full-speed packet, the rest is sent on each IN event. */
+#define USBD_FS_MAX_PACKET      64U
+#define USBD_IN_EP_NUM          5U              /* EP1..EP4 (INTRIN1 bits 1..4) */
+
+typedef struct {
+    const uint8_t *pun8Buf;                     /* next data to send */
+    uint32_t       un32Remain;                  /* bytes not yet in the FIFO */
+    uint8_t        bActive;                     /* multi-packet transfer running */
+    uint8_t        bZlp;                        /* zero-length packet after the data */
+} USBD_InXfer_t;
+
+static USBD_InXfer_t s_tInXfer[USBD_IN_EP_NUM];
+
 static volatile uint8_t ep0_setup_processing = 0;
 static volatile uint8_t ep0_h2d_candidate    = 0;
 static volatile uint8_t ep0_setup_stalled    = 0;
@@ -164,6 +178,7 @@ void USBD_Reset(void)
     s_un8FAddr = 0;
     HAL_USB_SetConnect(USB_ID_0, true);
     s_bFaddr = false;
+    memset(s_tInXfer, 0, sizeof(s_tInXfer));
     USB_LOG("Reset USB!\n");
 }
 
@@ -478,6 +493,35 @@ U32 USBD_WriteEP(U32 EPNum, U8 *pData, U32 cnt)
     if (un8EpNum == 1)
         PB->BCR = 1 << 8;
 
+    if ((un8EpNum != 0) && (un8EpNum < USBD_IN_EP_NUM))
+    {
+        USBD_InXfer_t *ptXfer = &s_tInXfer[un8EpNum];
+        uint8_t bZlp = 0;
+
+#if (USBD_BULK_ENABLE)
+        /* CMSIS-DAP v2: the host reads up to USBD_BULK_MAX_PACKET bytes, a response that ends
+         * on a packet boundary before that must be terminated by a zero-length packet. */
+        if ((un8EpNum == USBD_BULK_EP_BULKIN) &&
+            ((cnt % USBD_FS_MAX_PACKET) == 0U) && (cnt < USBD_BULK_MAX_PACKET))
+        {
+            bZlp = 1;
+        }
+#endif
+        if ((cnt > USBD_FS_MAX_PACKET) || bZlp)
+        {
+            uint32_t un32Len = (cnt > USBD_FS_MAX_PACKET) ? USBD_FS_MAX_PACKET : cnt;
+
+            ptXfer->pun8Buf    = pData + un32Len;
+            ptXfer->un32Remain = cnt - un32Len;
+            ptXfer->bZlp       = bZlp;
+            ptXfer->bActive    = 1;
+
+            HAL_USB_SetEPxFifo(USB_ID_0, un8EpNum, pData, (uint8_t)un32Len);
+            HAL_USB_SetEPxInControl(USB_ID_0, un8EpNum, USB_EPX_IN_CTRL_INPKTRDY);
+            return (cnt);
+        }
+    }
+
     HAL_USB_SetEPxFifo(USB_ID_0, un8EpNum, pData, cnt);
 #if DUMP
     for(int i = 0; i < cnt; i++)
@@ -539,6 +583,49 @@ U32 USBD_GetError(void)
 /*
  *  USB Device Interrupt Service Routine
  */
+
+/* IN packet sent: continue a multi-packet transfer.
+ * Returns 1 while the transfer is not finished (the class is not notified yet). */
+static uint8_t USBD_InXferContinue(uint8_t un8EpNum)
+{
+    USBD_InXfer_t *ptXfer;
+    uint32_t un32Len;
+
+    if ((un8EpNum == 0) || (un8EpNum >= USBD_IN_EP_NUM))
+    {
+        return 0;
+    }
+
+    ptXfer = &s_tInXfer[un8EpNum];
+    if (ptXfer->bActive == 0)
+    {
+        return 0;
+    }
+
+    if (ptXfer->un32Remain != 0)
+    {
+        un32Len = (ptXfer->un32Remain > USBD_FS_MAX_PACKET) ? USBD_FS_MAX_PACKET : ptXfer->un32Remain;
+        HAL_USB_SetEPxFifo(USB_ID_0, un8EpNum, ptXfer->pun8Buf, (uint8_t)un32Len);
+        ptXfer->pun8Buf    += un32Len;
+        ptXfer->un32Remain -= un32Len;
+        if ((ptXfer->un32Remain == 0) && (un32Len < USBD_FS_MAX_PACKET))
+        {
+            ptXfer->bZlp = 0;                   /* ends with a short packet */
+        }
+        HAL_USB_SetEPxInControl(USB_ID_0, un8EpNum, USB_EPX_IN_CTRL_INPKTRDY);
+        return 1;
+    }
+
+    if (ptXfer->bZlp)
+    {
+        ptXfer->bZlp = 0;
+        HAL_USB_SetEPxInControl(USB_ID_0, un8EpNum, USB_EPX_IN_CTRL_INPKTRDY);   /* ZLP */
+        return 1;
+    }
+
+    ptXfer->bActive = 0;                        /* all sent: notify the class */
+    return 0;
+}
 
 static void USB_HW_IRQHandler(uint32_t un32Event, void *pContext)
 {
@@ -678,7 +765,10 @@ void USBD_Handler(void)
             ptUsb->INDEX = u32Num;
 
             uint32_t un32InCsr = ptUsb->INCSR1;
-            if (USBD_P_EP[u32Num]) USBD_P_EP[u32Num](USBD_EVT_IN);
+            if (USBD_InXferContinue(u32Num) == 0)
+            {
+                if (USBD_P_EP[u32Num]) USBD_P_EP[u32Num](USBD_EVT_IN);
+            }
             un32InMask &= ~(1UL << u32Num);
         }
     }

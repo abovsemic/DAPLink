@@ -32,7 +32,7 @@
 //     <i> Enable high-speed functionality (if device supports it)
 #define USBD_HS_ENABLE              1
 #if (defined(WEBUSB_INTERFACE) || defined(WINUSB_INTERFACE) || defined(BULK_ENDPOINT))
-#define USBD_BOS_ENABLE             0
+#define USBD_BOS_ENABLE             1   // bcdUSB 2.10 + BOS: Windows reads MS OS 2.0 -> WinUSB for CMSIS-DAP v2
 #else
 #define USBD_BOS_ENABLE             0
 #endif
@@ -55,7 +55,7 @@
 #define USBD_POWER                  0
 #define USBD_MAX_PACKET0            64
 #define USBD_DEVDESC_IDVENDOR       0x1A29	//ABOV		0x0D28
-#define USBD_DEVDESC_IDPRODUCT      0xA808	//A-Link	0x0204
+#define USBD_DEVDESC_IDPRODUCT      0xA809	//A-Link (CMSIS-DAP v2 bulk; 0xA808 = HID version)	0x0204
 #define USBD_DEVDESC_BCDDEVICE      0x0100
 
 //   <h> Configuration Settings
@@ -397,13 +397,16 @@
 #else
 #define BULK_ENDPOINT 1
 #endif
+#if (BULK_ENDPOINT && HID_ENDPOINT)
+#error "BULK_ENDPOINT and HID_ENDPOINT cannot be used together (both use EP1): remove HID_ENDPOINT"
+#endif
 #define USBD_BULK_ENABLE             BULK_ENDPOINT
 #define USBD_BULK_EP_BULKIN          1 // fixme: both bulk and hid ep cannot be both enabled in a single build
 #define USBD_BULK_EP_BULKOUT         1
 #define USBD_BULK_EP_BULKIN_SWO      6
 #define USBD_BULK_WMAXPACKETSIZE     64
 #define USBD_BULK_HS_ENABLE          0
-#define USBD_BULK_HS_WMAXPACKETSIZE  512
+#define USBD_BULK_HS_WMAXPACKETSIZE  64     // full-speed device (USBD_Init sets USBD_HighSpeed): same as FS
 #define USBD_BULK_STRDESC            L"CMSIS-DAP v2"
 
 
@@ -538,11 +541,8 @@
 #define USBD_CDC_ACM_MAX_PACKET1   (0)
 #endif
 #if    (USBD_BULK_ENABLE)
-#if    (USBD_BULK_HS_ENABLE)
-#define USBD_BULK_MAX_PACKET       ((USBD_BULK_HS_WMAXPACKETSIZE > USBD_BULK_WMAXPACKETSIZE) ? USBD_BULK_HS_WMAXPACKETSIZE : USBD_BULK_WMAXPACKETSIZE)
-#else
-#define USBD_BULK_MAX_PACKET        (USBD_BULK_WMAXPACKETSIZE)
-#endif
+// Bulk transfer buffer = CMSIS-DAP packet (DAP_PACKET_SIZE in DAP_config.h), several 64-byte packets
+#define USBD_BULK_MAX_PACKET        (512)
 #else
 #define USBD_BULK_MAX_PACKET        (0)
 #endif
