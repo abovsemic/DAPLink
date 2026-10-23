@@ -124,7 +124,7 @@
 // <h> ABOV Target Debug Configuration (Read a user's manual of the target device carefully)
 //  <e> Configuration Debug Output
 //  <i> Configuration Debug Module and Id
-#define TARGET_BOARD_DEBUG_ENABLE    1
+#define TARGET_BOARD_DEBUG_ENABLE    0
 
 //   <o TARGET_SERIAL_MODULE> Serial Module List
 //      <BD_SERIAL_MODULE_NONE=> NONE (Default)

@@ -223,10 +223,10 @@ int __read(int file, char *p_char, int len)
 
 #endif
 
+#endif /* CONFIG_DEBUG */
+
 void _sys_exit(int return_code)
 {
 label:  goto label;  /* endless loop */
 }
-
-#endif /* CONFIG_DEBUG */
 

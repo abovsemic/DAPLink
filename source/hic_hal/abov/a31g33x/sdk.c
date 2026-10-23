@@ -85,11 +85,13 @@ void sdk_init()
     /* Set MCLK as a PLL 48MHz */
     (void)HAL_SCU_CLK_SetMClk(&tMClkCfg);
 
+#if (CONFIG_DEBUG == 1)
     /* serial init */
     HAL_PCU_SetAltMode((PCU_ID_e)DEBUG_PORT_ID,(PCU_PIN_ID_e)DEBUG_TX_PORT_ID,(PCU_ALT_e)DEBUG_TX_ALT_ID); /* For Debug */
     HAL_PCU_SetAltMode((PCU_ID_e)DEBUG_PORT_ID,(PCU_PIN_ID_e)DEBUG_RX_PORT_ID,(PCU_ALT_e)DEBUG_RX_ALT_ID); /* For Debug */
     Debug_Init();
     GetChipSetInfo();
+#endif
 		
     LOG("End of SDK Init\n");
 

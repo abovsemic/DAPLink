@@ -94,26 +94,28 @@ This information includes:
 
 /// Indicate that UART Serial Wire Output (SWO) trace is available.
 /// This information is returned by the command \ref DAP_Info as part of <b>Capabilities</b>.
-#define SWO_UART                0               ///< SWO UART:  1 = available, 0 = not available
+#define SWO_UART                1               ///< SWO UART:  1 = available, 0 = not available
 
 /// USART Driver instance number for the UART SWO.
 #define SWO_UART_DRIVER         0               ///< USART Driver instance number (Driver_USART#).
+// USART13 (RXD13 on PA1 = TDO/SWO pin) with DMA, Driver_USART0 in Driver_USART_a31g33x.c.
 
 /// Maximum SWO UART Baudrate
-#define SWO_UART_MAX_BAUDRATE   10000000U       ///< SWO UART Maximum Baudrate in Hz
+#define SWO_UART_MAX_BAUDRATE   3000000U        ///< SWO UART Maximum Baudrate in Hz (PCLK/16, integer divider)
 
 /// Indicate that Manchester Serial Wire Output (SWO) trace is available.
 /// This information is returned by the command \ref DAP_Info as part of <b>Capabilities</b>.
 #define SWO_MANCHESTER          0               ///< SWO Manchester:  1 = available, 0 = not available.
 
 /// SWO Trace Buffer Size.
-#define SWO_BUFFER_SIZE         4096U           ///< SWO Trace Buffer Size in bytes (must be 2^n).
+#define SWO_BUFFER_SIZE         2048U           ///< SWO Trace Buffer Size in bytes (must be 2^n).
 
 /// SWO Streaming Trace.
 #define SWO_STREAM              0               ///< SWO Streaming Trace: 1 = available, 0 = not available.
 
 /// Clock frequency of the Test Domain Timer. Timer value is returned with \ref TIMESTAMP_GET.
-#define TIMESTAMP_CLOCK         1000000U      ///< Timestamp clock in Hz (0 = timestamps not supported).
+#define TIMESTAMP_CLOCK         48000000U       ///< Timestamp clock in Hz (0 = timestamps not supported).
+// TIMER20 free-running counter at PCLK (started by SWJ_TimerInit in DAP_SETUP).
 
 /// Indicate that UART Communication Port is available.
 /// This information is returned by the command \ref DAP_Info as part of <b>Capabilities</b>.
@@ -227,8 +229,7 @@ __STATIC_INLINE void PORT_SWD_SETUP(void)
     HAL_PCU_SetInOutMode((PCU_ID_e)nRESET_PIN_PORT, (PCU_PIN_ID_e)nRESET_PIN, PCU_INOUT_OUTPUT_PUSH_PULL);
     HAL_PCU_SetOutputBit((PCU_ID_e)nRESET_PIN_PORT, (PCU_PIN_ID_e)nRESET_PIN, PCU_OUTPUT_BIT_SET);
 
-    // Set TDO HIGH (Input Not Used)
-    HAL_PCU_SetInOutMode((PCU_ID_e)JTAG_TDO_PIN_PORT, (PCU_PIN_ID_e)JTAG_TDO_PIN, PCU_INOUT_INPUT);
+    // TDO/SWO pin is left to the SWO driver (GPIO input or RXD13 while SWO capture is active)
 
     // Set TDI HIGH (Input Not Used)
     HAL_PCU_SetInOutMode((PCU_ID_e)JTAG_TDI_PIN_PORT, (PCU_PIN_ID_e)JTAG_TDI_PIN, PCU_INOUT_INPUT);
@@ -479,7 +480,7 @@ default, the DWT timer is used.  The frequency of this timer is configured with 
 \return Current timestamp value.
 */
 __STATIC_INLINE uint32_t TIMESTAMP_GET (void) {
-  return (0);
+  return (TIMER20->CNT);
 }
 
 ///@}

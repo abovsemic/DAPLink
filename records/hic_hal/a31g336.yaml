@@ -11,10 +11,11 @@ common:
         - __packed=__packed          # Prevent redefinition of __packed with ARMCC
         - DAPLINK_NO_ASSERT_FILENAMES
         - OS_CLOCK=48000000
-        - TARGET_BOARD_DEBUG_ENABLE=1
+        - TARGET_BOARD_DEBUG_ENABLE=0
         - CONFIG_HAL_TIMER1
         - CONFIG_HAL_USART
         - CONFIG_HAL_USB
+        - CONFIG_HAL_DMAC
     includes:
         - source/hic_hal/abov/a31g33x
         - source/hic_hal/abov/a31g33x/USB/Include

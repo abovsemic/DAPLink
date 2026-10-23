@@ -29,7 +29,11 @@
 /*----------------------------------------------------------------------------
   External References
  *----------------------------------------------------------------------------*/
-#define INITIAL_SP_VALUE  (DAPLINK_RAM_APP_START + DAPLINK_RAM_APP_SIZE)
+/* Main stack (MSP: reset, C library init, interrupts) reserved by the linker in RW_IRAM1,
+ * so RW/ZI data can never grow into it (RW_IRAM1 overflow gives a link error instead). */
+#define MSP_STACK_SIZE    0x0800
+static uint64_t s_un64MspStack[MSP_STACK_SIZE / sizeof(uint64_t)];   /* 8-byte aligned */
+#define INITIAL_SP_VALUE  ((uint32_t)&s_un64MspStack[MSP_STACK_SIZE / sizeof(uint64_t)])
 
 #if (CONFIG_EMUL_JTAG_CONNECTION == 1)
 int8_t g_bIsARMisDebugMode = 0;
@@ -98,7 +102,7 @@ extern const VECTOR_TABLE_Type __VECTOR_TABLE[48];
        const VECTOR_TABLE_Type __VECTOR_TABLE[48] __VECTOR_TABLE_ATTRIBUTE =
 {
 //  (VECTOR_TABLE_Type)(&__INITIAL_SP),       /*     Initial Stack Pointer */
-  INITIAL_SP_VALUE,       /*     Initial Stack Pointer */
+  (VECTOR_TABLE_Type)(&s_un64MspStack[MSP_STACK_SIZE / sizeof(uint64_t)]),  /* Initial Stack Pointer */
   Reset_Handler,                            /*     Reset Handler */
   NMI_Handler,                              /* -14 NMI Handler */
   HardFault_Handler,                        /* -13 Hard Fault Handler */
@@ -156,11 +160,12 @@ __value_in_regs struct __initial_stackheap __user_initial_stackheap(
 {
     struct __initial_stackheap config;
     
-    config.heap_base   = DAPLINK_RAM_APP_START; 
-    config.heap_limit  = DAPLINK_RAM_APP_START + 0x0400; 
-    
-    config.stack_base  = INITIAL_SP_VALUE;                 
-    config.stack_limit = INITIAL_SP_VALUE - 0x0800;        
+    /* No heap (no malloc in the build): it was at RAM start, over RW data and ram_func code */
+    config.heap_base   = (uint32_t)&s_un64MspStack[0];
+    config.heap_limit  = (uint32_t)&s_un64MspStack[0];
+
+    config.stack_base  = INITIAL_SP_VALUE;
+    config.stack_limit = (uint32_t)&s_un64MspStack[0];
     
     return config;
 }

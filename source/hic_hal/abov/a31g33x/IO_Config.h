@@ -39,9 +39,9 @@ COMPILER_ASSERT(DAPLINK_HIC_ID == DAPLINK_HIC_ID_STM32F103XB);
 
 //Connected LED
 
-/* CONNECTED LED */
+/* CONNECTED LED (LED1) */
 #define CONNECTED_LED_PORT           PCU_ID_A
-#define CONNECTED_LED_PIN            PCU_PIN_ID_1
+#define CONNECTED_LED_PIN            PCU_PIN_ID_3
 #define CONNECTED_LED_PIN_Bit        0
 
 // nRESET OUT Pin
@@ -64,22 +64,26 @@ COMPILER_ASSERT(DAPLINK_HIC_ID == DAPLINK_HIC_ID_STM32F103XB);
 
 //JTAG
 #define JTAG_TDO_PIN_PORT            PCU_ID_A
-#define JTAG_TDO_PIN                 PCU_PIN_ID_6
+#define JTAG_TDO_PIN                 PCU_PIN_ID_1    // TDO/SWO: PA1 (AF2 = RXD13 for SWO, Driver_USART_a31g33x.c)
 #define JTAG_TDO_PIN_Bit             0
 
 #define JTAG_TDI_PIN_PORT            PCU_ID_A
 #define JTAG_TDI_PIN                 PCU_PIN_ID_7
 #define JTAG_TDI_PIN_Bit             0
 
-/* HID LED */
+/* HID LED (LED0) */
 #define PIN_HID_LED_PORT             PCU_ID_A
-#define PIN_HID_LED                  PCU_PIN_ID_0
+#define PIN_HID_LED                  PCU_PIN_ID_2
 #define PIN_HID_LED_Bit              0
 
 
-/* CDC LED */
+/* CDC LED (LED0) */
 #define PIN_CDC_LED_PORT             PCU_ID_A
-#define PIN_CDC_LED                  PCU_PIN_ID_0
+#define PIN_CDC_LED                  PCU_PIN_ID_2
 #define PIN_CDC_LED_Bit              0
+
+#if (CONFIG_DEBUG == 1) && (DEBUG_UART_ID == 0)
+#error "Debug log on USART10 uses PA2/PA3 = LED0/LED1: set TARGET_BOARD_DEBUG_ENABLE to 0"
+#endif
 
 #endif
