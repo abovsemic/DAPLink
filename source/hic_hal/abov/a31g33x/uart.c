@@ -121,7 +121,7 @@ int32_t uart_reset(void)
 
 int32_t uart_set_configuration(UART_Configuration *config)
 {
-    USART_CFG_t tUsartCfg;
+    USART_CFG_t tUsartCfg = { (USART_MODE_e)0 };   // also clears bDoubleSpeed and tRTO
 
 
     HAL_USART_Abort(USART_ID_1);
