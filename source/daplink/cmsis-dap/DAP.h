@@ -31,8 +31,9 @@
 #define __DAP_H__
 
 
-// DAP Firmware Version
-#ifdef  DAP_FW_V1
+// DAP Firmware Version (DAP_config.h can override it)
+#if defined(DAP_FW_VER)
+#elif defined(DAP_FW_V1)
 #define DAP_FW_VER                      "1.3.0"
 #else
 #define DAP_FW_VER                      "2.1.0"

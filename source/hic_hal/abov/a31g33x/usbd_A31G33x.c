@@ -83,7 +83,8 @@ static bool s_bFaddr = false;
 /* IN transfers longer than one packet (e.g. 512-byte CMSIS-DAP v2 bulk response):
  * the endpoint FIFO holds one full-speed packet, the rest is sent on each IN event. */
 #define USBD_FS_MAX_PACKET      64U
-#define USBD_IN_EP_NUM          5U              /* EP1..EP4 (INTRIN1 bits 1..4) */
+#define USBD_IN_EP_NUM          6U              /* EP1..EP5 (INTRIN1 bits 1..5) */
+#define USBD_IN_EP_MSK          0x3EU           /* INTRIN1: EP1..EP5 */
 
 typedef struct {
     const uint8_t *pun8Buf;                     /* next data to send */
@@ -179,6 +180,9 @@ void USBD_Reset(void)
     HAL_USB_SetConnect(USB_ID_0, true);
     s_bFaddr = false;
     memset(s_tInXfer, 0, sizeof(s_tInXfer));
+#if (USBD_I2C_ENABLE)
+    usbd_i2c_init();                            /* drop a response not read before the reset */
+#endif
     USB_LOG("Reset USB!\n");
 }
 
@@ -507,6 +511,14 @@ U32 USBD_WriteEP(U32 EPNum, U8 *pData, U32 cnt)
             bZlp = 1;
         }
 #endif
+#if (USBD_I2C_ENABLE)
+        /* I2C interface: the host reads with a buffer larger than any response, a response
+         * that ends on a packet boundary is always terminated by a zero-length packet. */
+        if ((un8EpNum == USBD_I2C_EP_BULKIN) && ((cnt % USBD_FS_MAX_PACKET) == 0U))
+        {
+            bZlp = 1;
+        }
+#endif
         if ((cnt > USBD_FS_MAX_PACKET) || bZlp)
         {
             uint32_t un32Len = (cnt > USBD_FS_MAX_PACKET) ? USBD_FS_MAX_PACKET : cnt;
@@ -755,9 +767,9 @@ void USBD_Handler(void)
         }
     }
 
-    if ((un32InEpEvent & 0x1E) != 0)
+    if ((un32InEpEvent & USBD_IN_EP_MSK) != 0)
     {
-        uint32_t un32InMask = un32InEpEvent & 0x1E;
+        uint32_t un32InMask = un32InEpEvent & USBD_IN_EP_MSK;
         while (un32InMask != 0)
         {
             uint8_t u32Num = 31 - __clz(un32InMask);

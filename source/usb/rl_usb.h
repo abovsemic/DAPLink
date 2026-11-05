@@ -91,6 +91,7 @@ extern BOOL  usbd_cls_if_req(BOOL setup);
 extern BOOL  usbd_cls_ep_req(BOOL setup);
 
 extern void  usbd_bulk_init(void);
+extern void  usbd_i2c_init(void);
 
 #ifdef __cplusplus
 }

@@ -106,6 +106,10 @@ extern const U16 USBD_Bulk_BulkBufSize;
 extern       U8 USBD_Bulk_BulkInBuf[];
 extern       U8 USBD_Bulk_BulkOutBuf[];
 
+extern U8 usbd_i2c_if_num;
+extern const U8 usbd_i2c_ep_bulkin;
+extern const U8 usbd_i2c_ep_bulkout;
+
 extern void usbd_os_evt_set(U16 event_flags, U32 task);
 extern U16 usbd_os_evt_get(void);
 extern U32 usbd_os_evt_wait_or(U16 wait_flags, U16 timeout);

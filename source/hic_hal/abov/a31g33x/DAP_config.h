@@ -142,7 +142,8 @@ This information includes:
 
 ///@}
 
-#define CMSIS_DAP_PRODUCT_NAME "A-Link CMSIS-DAP"
+#define CMSIS_DAP_PRODUCT_NAME "A-Link-MINI-V1 CMSIS-DAP"
+#define DAP_FW_VER             "2.1.1"          ///< DAP_Info Firmware Version (DAP.h default 2.1.0)
 
 //**************************************************************************************************
 /**
@@ -518,6 +519,8 @@ __STATIC_INLINE void DAP_SETUP(void)
     HAL_PCU_SetInOutMode((PCU_ID_e)SWDIO_OUT_PIN_PORT, (PCU_PIN_ID_e)SWDIO_OUT_PIN, PCU_INOUT_OUTPUT_PUSH_PULL);
     HAL_PCU_SetOutputBit((PCU_ID_e)SWDIO_OUT_PIN_PORT, (PCU_PIN_ID_e)SWDIO_OUT_PIN, PCU_OUTPUT_BIT_SET);
 
+    /* nRESET released (high) before the output is enabled: no reset pulse on the target */
+    HAL_PCU_SetOutputBit((PCU_ID_e)nRESET_PIN_PORT, (PCU_PIN_ID_e)nRESET_PIN, PCU_OUTPUT_BIT_SET);
     HAL_PCU_SetInOutMode((PCU_ID_e)nRESET_PIN_PORT, (PCU_PIN_ID_e)nRESET_PIN, PCU_INOUT_OUTPUT_PUSH_PULL);
 
     /* Add connected LED on */

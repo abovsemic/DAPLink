@@ -82,6 +82,10 @@ COMPILER_ASSERT(DAPLINK_HIC_ID == DAPLINK_HIC_ID_STM32F103XB);
 #define PIN_CDC_LED                  PCU_PIN_ID_2
 #define PIN_CDC_LED_Bit              0
 
+/* Touch IC interrupt input (QuickTouch): PA10, EINT0 (i2c_vendor_a31g33x.c) */
+#define TOUCH_INT_PIN_PORT           PCU_ID_A
+#define TOUCH_INT_PIN                PCU_PIN_ID_10
+
 #if (CONFIG_DEBUG == 1) && (DEBUG_UART_ID == 0)
 #error "Debug log on USART10 uses PA2/PA3 = LED0/LED1: set TARGET_BOARD_DEBUG_ENABLE to 0"
 #endif

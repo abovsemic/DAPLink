@@ -56,7 +56,7 @@
 #define USBD_MAX_PACKET0            64
 #define USBD_DEVDESC_IDVENDOR       0x1A29	//ABOV		0x0D28
 #define USBD_DEVDESC_IDPRODUCT      0xA809	//A-Link (CMSIS-DAP v2 bulk; 0xA808 = HID version)	0x0204
-#define USBD_DEVDESC_BCDDEVICE      0x0100
+#define USBD_DEVDESC_BCDDEVICE      0x0101  // 0x0101: I2C interface added (new bcdDevice: Windows reads the MS OS 2.0 set again)
 
 //   <h> Configuration Settings
 //     <i> These settings affect Configuration Descriptor
@@ -92,7 +92,7 @@
 #define USBD_STRDESC_LANGID         0x0409
 #define USBD_STRDESC_MAN            L"ABOV"
 #ifndef USB_PROD_STR
-#define USBD_STRDESC_PROD           L"A-Link CMSIS-DAP"
+#define USBD_STRDESC_PROD           L"A-Link-MINI-V1 CMSIS-DAP"
 #else
 #define _TOWIDE(x)                   L ## #x
 #define TOWIDE(x)                   _TOWIDE(x)
@@ -409,10 +409,21 @@
 #define USBD_BULK_HS_WMAXPACKETSIZE  64     // full-speed device (USBD_Init sets USBD_HighSpeed): same as FS
 #define USBD_BULK_STRDESC            L"CMSIS-DAP v2"
 
+// I2C bridge: second WinUSB bulk interface with its own endpoint pair (i2c_vendor_a31g33x.c), so
+// a PC tool (QuickTouch) can use I2C while a debugger holds the CMSIS-DAP v2 interface.
+// Its MS OS 2.0 function subset has an own interface GUID and its string has no "CMSIS-DAP":
+// Keil and OpenOCD do not see it.
+#define USBD_I2C_ENABLE              BULK_ENDPOINT      // uses the WinUSB descriptor set of the bulk build
+#define USBD_I2C_EP_BULKIN           5
+#define USBD_I2C_EP_BULKOUT          5
+#define USBD_I2C_WMAXPACKETSIZE      64
+#define USBD_I2C_HS_WMAXPACKETSIZE   64
+#define USBD_I2C_STRDESC             L"A-Link I2C"
+
 
 /* USB Device Calculations ---------------------------------------------------*/
 
-#define USBD_IF_NUM_MAX             (USBD_BULK_ENABLE+USBD_WEBUSB_ENABLE+USBD_HID_ENABLE+USBD_MSC_ENABLE+(USBD_ADC_ENABLE*2)+(USBD_CDC_ACM_ENABLE*2)+USBD_CLS_ENABLE)
+#define USBD_IF_NUM_MAX             (USBD_BULK_ENABLE+USBD_I2C_ENABLE+USBD_WEBUSB_ENABLE+USBD_HID_ENABLE+USBD_MSC_ENABLE+(USBD_ADC_ENABLE*2)+(USBD_CDC_ACM_ENABLE*2)+USBD_CLS_ENABLE)
 #define USBD_MULTI_IF               (USBD_CDC_ACM_ENABLE*(USBD_HID_ENABLE|USBD_MSC_ENABLE|USBD_ADC_ENABLE|USBD_CLS_ENABLE|USBD_WEBUSB_ENABLE|USBD_BULK_ENABLE))
 // #define MAX(x, y)                   (((x) < (y)) ? (y) : (x))
 #define USBD_EP_NUM_CALC0           MAX((USBD_HID_ENABLE    *(USBD_HID_EP_INTIN     )), (USBD_HID_ENABLE    *(USBD_HID_EP_INTOUT)))
@@ -423,7 +434,8 @@
 #define USBD_EP_NUM_CALC5           MAX(USBD_EP_NUM_CALC2, USBD_EP_NUM_CALC3)
 #define USBD_EP_NUM_CALC6           MAX(USBD_EP_NUM_CALC4, USBD_EP_NUM_CALC5)
 #define USBD_EP_NUM_CALC7           MAX((USBD_BULK_ENABLE*(USBD_BULK_EP_BULKIN)), (USBD_BULK_ENABLE*(USBD_BULK_EP_BULKOUT)))
-#define USBD_EP_NUM                 MAX(USBD_EP_NUM_CALC6, USBD_EP_NUM_CALC7)
+#define USBD_EP_NUM_CALC8           MAX((USBD_I2C_ENABLE*(USBD_I2C_EP_BULKIN)), (USBD_I2C_ENABLE*(USBD_I2C_EP_BULKOUT)))
+#define USBD_EP_NUM                 MAX(MAX(USBD_EP_NUM_CALC6, USBD_EP_NUM_CALC7), USBD_EP_NUM_CALC8)
 
 #if    (USBD_HID_ENABLE)
 #if    (USBD_MSC_ENABLE)
@@ -497,6 +509,10 @@
 #define USBD_WEBUSB_IF_STR_NUM     (3+USBD_STRDESC_SER_ENABLE+USBD_ADC_ENABLE*3+USBD_CDC_ACM_ENABLE*2+USBD_HID_ENABLE)
 #define USBD_MSC_IF_STR_NUM        (3+USBD_STRDESC_SER_ENABLE+USBD_ADC_ENABLE*3+USBD_CDC_ACM_ENABLE*2+USBD_HID_ENABLE+USBD_WEBUSB_ENABLE)
 #define USBD_BULK_IF_STR_NUM       (3+USBD_STRDESC_SER_ENABLE+USBD_ADC_ENABLE*3+USBD_CDC_ACM_ENABLE*2+USBD_HID_ENABLE+USBD_WEBUSB_ENABLE+USBD_MSC_ENABLE)
+#define USBD_I2C_IF_STR_NUM        (USBD_BULK_IF_STR_NUM+USBD_BULK_ENABLE)
+
+// Configuration descriptor buffers (FS and HS): exact size + the 0 terminator the core walks to (RAM is short)
+#define USBD_CONFIG_DESC_SIZE      (USBD_WTOTALLENGTH_MAX + 1)
 
 #if    (USBD_HID_ENABLE)
 #if    (USBD_HID_HS_ENABLE)

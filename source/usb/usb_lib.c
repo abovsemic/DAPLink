@@ -43,6 +43,10 @@
 
 #if    (USBD_ENABLE)
 
+#ifndef USBD_I2C_ENABLE
+#define USBD_I2C_ENABLE             0   /* second vendor bulk interface (HIC usb_config.c) */
+#endif
+
 U8 USBD_AltSetting[USBD_IF_NUM_MAX];
 U8 USBD_EP0Buf[USBD_MAX_PACKET0];
 const U8 usbd_power = USBD_POWER;
@@ -154,6 +158,12 @@ const U16 usbd_bulk_maxpacketsize[2] = {USBD_BULK_WMAXPACKETSIZE, USBD_BULK_HS_W
 const U16 USBD_Bulk_BulkBufSize = USBD_BULK_MAX_PACKET;
 U8 USBD_Bulk_BulkInBuf[USBD_BULK_MAX_PACKET];
 U8 USBD_Bulk_BulkOutBuf[USBD_BULK_MAX_PACKET];
+#endif
+
+#if    (USBD_I2C_ENABLE)
+U8 usbd_i2c_if_num  = 0; //assigned during runtime init
+const U8 usbd_i2c_ep_bulkin = USBD_I2C_EP_BULKIN;
+const U8 usbd_i2c_ep_bulkout = USBD_I2C_EP_BULKOUT;
 #endif
 
 /*------------------------------------------------------------------------------
@@ -1026,6 +1036,28 @@ BOOL USBD_EndPoint0_Out_CDC_ReqToIF(void)
 
 #endif  /* (USBD_BULK_ENABLE) */
 
+#if    (USBD_I2C_ENABLE)
+#if    (USBD_I2C_EP_BULKIN != USBD_I2C_EP_BULKOUT)
+#error "I2C interface: the bulk IN and OUT endpoints must have the same number"
+#elif  (USBD_I2C_EP_BULKIN == 1)
+#define USBD_EndPoint1                 USBD_I2C_EP_BULK_Event
+#elif  (USBD_I2C_EP_BULKIN == 2)
+#define USBD_EndPoint2                 USBD_I2C_EP_BULK_Event
+#elif  (USBD_I2C_EP_BULKIN == 3)
+#define USBD_EndPoint3                 USBD_I2C_EP_BULK_Event
+#elif  (USBD_I2C_EP_BULKIN == 4)
+#define USBD_EndPoint4                 USBD_I2C_EP_BULK_Event
+#elif  (USBD_I2C_EP_BULKIN == 5)
+#define USBD_EndPoint5                 USBD_I2C_EP_BULK_Event
+#elif  (USBD_I2C_EP_BULKIN == 6)
+#define USBD_EndPoint6                 USBD_I2C_EP_BULK_Event
+#elif  (USBD_I2C_EP_BULKIN == 7)
+#define USBD_EndPoint7                 USBD_I2C_EP_BULK_Event
+#else
+#error "I2C interface: endpoint number not supported"
+#endif
+#endif  /* (USBD_I2C_ENABLE) */
+
 #if    (USBD_CLS_ENABLE)
 #else
 BOOL USBD_EndPoint0_Setup_CLS_ReqToDEV(void)
@@ -1590,6 +1622,7 @@ void USBD_RTX_TaskInit(void)
 #define USBD_HID_DESC_LEN                 (USB_INTERFACE_DESC_SIZE + USB_HID_DESC_SIZE                                                          + \
                                           (USB_ENDPOINT_DESC_SIZE*((USBD_HID_EP_INTIN != 0)+(USBD_HID_EP_INTOUT != 0))))
 #define USBD_BULK_DESC_LEN                (USB_INTERFACE_DESC_SIZE + 2*USB_ENDPOINT_DESC_SIZE)
+#define USBD_I2C_DESC_LEN                 (USB_INTERFACE_DESC_SIZE + 2*USB_ENDPOINT_DESC_SIZE)
 
 #define USBD_HID_DESC_OFS                 (USB_CONFIGUARTION_DESC_SIZE + USB_INTERFACE_DESC_SIZE                                                + \
                                            USBD_MSC_ENABLE * USBD_MSC_DESC_LEN + USBD_CDC_ACM_ENABLE * USBD_CDC_ACM_DESC_LEN)
@@ -1599,6 +1632,7 @@ void USBD_RTX_TaskInit(void)
                                            USBD_HID_DESC_LEN     * USBD_HID_ENABLE     + \
                                            (USB_INTERFACE_DESC_SIZE) * USBD_WEBUSB_ENABLE + \
                                            USBD_BULK_DESC_LEN     * USBD_BULK_ENABLE + \
+                                           USBD_I2C_DESC_LEN      * USBD_I2C_ENABLE + \
                                            USBD_MSC_DESC_LEN     * USBD_MSC_ENABLE)
 
 /*------------------------------------------------------------------------------
@@ -1740,7 +1774,8 @@ const U8 USBD_DeviceQualifier_HS[] = { 0 };
 #define FUNCTION_SUBSET_LEN                 160
 #define DEVICE_INTERFACE_GUIDS_FEATURE_LEN  132
 
-#define USBD_WINUSB_DESC_SET_LEN            (WINUSB_DESCRIPTOR_SET_HEADER_SIZE + USBD_WEBUSB_ENABLE * FUNCTION_SUBSET_LEN + USBD_BULK_ENABLE * FUNCTION_SUBSET_LEN)
+#define USBD_WINUSB_DESC_SET_LEN            (WINUSB_DESCRIPTOR_SET_HEADER_SIZE + USBD_WEBUSB_ENABLE * FUNCTION_SUBSET_LEN + USBD_BULK_ENABLE * FUNCTION_SUBSET_LEN + \
+                                             USBD_I2C_ENABLE * FUNCTION_SUBSET_LEN)
 
 U8 USBD_WinUSBDescriptorSetDescriptor[] = {
     WBVAL(WINUSB_DESCRIPTOR_SET_HEADER_SIZE), /* wLength */
@@ -1797,6 +1832,33 @@ U8 USBD_WinUSBDescriptorSetDescriptor[] = {
     '4',0,'6',0,'6',0,'3',0,'-',0,
     'A',0,'A',0,'3',0,'6',0,'-',
     0,'1',0,'A',0,'A',0,'E',0,'4',0,'6',0,'4',0,'6',0,'3',0,'7',0,'7',0,'6',0,
+    '}',0,0,0,0,0,
+#endif
+#if (USBD_I2C_ENABLE)
+    WBVAL(WINUSB_FUNCTION_SUBSET_HEADER_SIZE),/* wLength */
+    WBVAL(WINUSB_SUBSET_HEADER_FUNCTION_TYPE),/* wDescriptorType */
+    0,                                        /* bFirstInterface USBD_I2C_IF_NUM */
+    0,                                        /* bReserved */
+    WBVAL(FUNCTION_SUBSET_LEN),               /* wSubsetLength */
+    WBVAL(WINUSB_FEATURE_COMPATIBLE_ID_SIZE), /* wLength */
+    WBVAL(WINUSB_FEATURE_COMPATIBLE_ID_TYPE), /* wDescriptorType */
+    'W', 'I', 'N', 'U', 'S', 'B', 0, 0,       /* CompatibleId */
+    0, 0, 0, 0, 0, 0, 0, 0,                   /* SubCompatibleId */
+    WBVAL(DEVICE_INTERFACE_GUIDS_FEATURE_LEN),/* wLength */
+    WBVAL(WINUSB_FEATURE_REG_PROPERTY_TYPE),  /* wDescriptorType */
+    WBVAL(WINUSB_PROP_DATA_TYPE_REG_MULTI_SZ), /* wPropertyDataType */
+    WBVAL(42), /* wPropertyNameLength */
+    'D',0,'e',0,'v',0,'i',0,'c',0,'e',0,
+    'I',0,'n',0,'t',0,'e',0,'r',0,'f',0,'a',0,'c',0,'e',0,
+    'G',0,'U',0,'I',0,'D',0,'s',0,0,0,
+    WBVAL(80), /* wPropertyDataLength */
+    /* {6E0C9B7A-3F42-4D1E-A5B8-91C7D2E4F036}: A-Link I2C interface (not the CMSIS-DAP v2 GUID) */
+    '{',0,
+    '6',0,'E',0,'0',0,'C',0,'9',0,'B',0,'7',0,'A',0,'-',0,
+    '3',0,'F',0,'4',0,'2',0,'-',0,
+    '4',0,'D',0,'1',0,'E',0,'-',0,
+    'A',0,'5',0,'B',0,'8',0,'-',0,
+    '9',0,'1',0,'C',0,'7',0,'D',0,'2',0,'E',0,'4',0,'F',0,'0',0,'3',0,'6',0,
     '}',0,0,0,0,0,
 #endif
 };
@@ -2070,6 +2132,34 @@ const U8 USBD_BinaryObjectStoreDescriptor[] = { 0 };
   WBVAL(USBD_BULK_HS_WMAXPACKETSIZE),       /* wMaxPacketSize */                                                \
   0x00,                                 /* bInterval: ignore for Bulk transfer */
 
+#define I2C_DESC                        /* Interface, Alternate Setting 0, Vendor Class */                  \
+  USB_INTERFACE_DESC_SIZE,              /* bLength */                                                       \
+  USB_INTERFACE_DESCRIPTOR_TYPE,        /* bDescriptorType */                                               \
+  0x00,                                 /* bInterfaceNumber USBD_I2C_IF_NUM */                              \
+  0x00,                                 /* bAlternateSetting */                                             \
+  0x02,                                 /* bNumEndpoints */                                                 \
+  USB_DEVICE_CLASS_VENDOR_SPECIFIC,     /* bInterfaceClass */                                               \
+  0x00,                                 /* bInterfaceSubClass */                                            \
+  0x00,                                 /* bInterfaceProtocol */                                            \
+  USBD_I2C_IF_STR_NUM,                  /* iInterface */
+
+#define I2C_EP(size)                    /* I2C Endpoints */                                                 \
+/* Endpoint, EP Bulk OUT */                                                                                 \
+  USB_ENDPOINT_DESC_SIZE,               /* bLength */                                                       \
+  USB_ENDPOINT_DESCRIPTOR_TYPE,         /* bDescriptorType */                                               \
+  USB_ENDPOINT_OUT(USBD_I2C_EP_BULKOUT),/* bEndpointAddress */                                              \
+  USB_ENDPOINT_TYPE_BULK,               /* bmAttributes */                                                  \
+  WBVAL(size),                          /* wMaxPacketSize */                                                \
+  0x00,                                 /* bInterval: ignore for Bulk transfer */                           \
+                                                                                                            \
+/* Endpoint, EP Bulk IN */                                                                                  \
+  USB_ENDPOINT_DESC_SIZE,               /* bLength */                                                       \
+  USB_ENDPOINT_DESCRIPTOR_TYPE,         /* bDescriptorType */                                               \
+  USB_ENDPOINT_IN(USBD_I2C_EP_BULKIN),  /* bEndpointAddress */                                              \
+  USB_ENDPOINT_TYPE_BULK,               /* bmAttributes */                                                  \
+  WBVAL(size),                          /* wMaxPacketSize */                                                \
+  0x00,                                 /* bInterval: ignore for Bulk transfer */
+
 #define ADC_DESC_IAD(first,num_of_ifs)  /* ADC: Interface Association Descriptor */                         \
   USB_INTERFACE_ASSOC_DESC_SIZE,        /* bLength */                                                       \
   USB_INTERFACE_ASSOCIATION_DESCRIPTOR_TYPE,  /* bDescriptorType */                                         \
@@ -2327,10 +2417,14 @@ const U8 USBD_BinaryObjectStoreDescriptor[] = { 0 };
   WBVAL(USBD_CDC_ACM_HS_WMAXPACKETSIZE1),/* wMaxPacketSize */                                               \
   USBD_CDC_ACM_HS_BINTERVAL1,           /* bInterval */
 
+#ifndef USBD_CONFIG_DESC_SIZE
+#define USBD_CONFIG_DESC_SIZE           200
+#endif
+
 /* USB Device Configuration Descriptor (for Full Speed) */
 /*   All Descriptors (Configuration, Interface, Endpoint, Class, Vendor) */
 __WEAK \
-U8 USBD_ConfigDescriptor[200] = { 0 };
+U8 USBD_ConfigDescriptor[USBD_CONFIG_DESC_SIZE] = { 0 };
 
 #if (USBD_HS_ENABLE == 0)               /* If High-speed not enabled, declare dummy descriptors for High-speed */
 __WEAK \
@@ -2339,7 +2433,7 @@ U8 USBD_ConfigDescriptor_HS[] = { 0 };
 /* USB Device Configuration Descriptor (for High Speed) */
 /*   All Descriptors (Configuration, Interface, Endpoint, Class, Vendor) */
 __WEAK \
-U8 USBD_ConfigDescriptor_HS[200] = { 0 };
+U8 USBD_ConfigDescriptor_HS[USBD_CONFIG_DESC_SIZE] = { 0 };
 
 #endif
 
@@ -2390,6 +2484,9 @@ const struct {
 #if (USBD_BULK_ENABLE)
     USBD_STR_DEF(BULK_STRDESC);
 #endif
+#if (USBD_I2C_ENABLE)
+    USBD_STR_DEF(I2C_STRDESC);
+#endif
 } USBD_StringDescriptor
 = {
     { 4, USB_STRING_DESCRIPTOR_TYPE, USBD_STRDESC_LANGID },
@@ -2418,6 +2515,9 @@ const struct {
 #endif
 #if (USBD_BULK_ENABLE)
     USBD_STR_VAL(BULK_STRDESC),
+#endif
+#if (USBD_I2C_ENABLE)
+    USBD_STR_VAL(I2C_STRDESC),
 #endif
 };
 
@@ -2675,6 +2775,39 @@ static U16 bulk_desc_fill(U8 * config_desc, U8 * config_desc_hs, U8 if_num) {
 }
 #endif
 
+#if (USBD_I2C_ENABLE)
+static U16 i2c_desc_fill(U8 * config_desc, U8 * config_desc_hs, U8 if_num) {
+    U8 * pD = 0;
+    const U8 i2c_desc[] = {
+        I2C_DESC
+        I2C_EP(USBD_I2C_WMAXPACKETSIZE)
+    };
+    pD = config_desc;
+    memcpy(pD, i2c_desc, sizeof(i2c_desc));
+    ((USB_INTERFACE_DESCRIPTOR *)pD)->bInterfaceNumber = if_num;
+#if (USBD_HS_ENABLE == 1)
+    const U8 i2c_desc_hs[] = {
+        I2C_DESC
+        I2C_EP(USBD_I2C_HS_WMAXPACKETSIZE)
+    };
+    pD = config_desc_hs;
+    memcpy(pD, i2c_desc_hs, sizeof(i2c_desc_hs));
+    ((USB_INTERFACE_DESCRIPTOR *)pD)->bInterfaceNumber = if_num;
+#endif
+
+#if (USBD_WINUSB_ENABLE)
+    /* function subset after the WebUSB and the bulk subsets */
+    pD = USBD_WinUSBDescriptorSetDescriptor + WINUSB_DESCRIPTOR_SET_HEADER_SIZE +
+         (USBD_WEBUSB_ENABLE + USBD_BULK_ENABLE) * FUNCTION_SUBSET_LEN;
+    ((WINUSB_FUNCTION_SUBSET_HEADER*)pD)->bFirstInterface = if_num;
+#else
+#error "The I2C interface requires WINUSB!"
+#endif
+
+    return sizeof(i2c_desc);
+}
+#endif
+
 void usbd_class_init(void)
 {
     U8  if_num = 0;
@@ -2737,6 +2870,12 @@ void usbd_class_init(void)
     usbd_bulk_if_num = if_num++;
     desc_ptr += bulk_desc_fill(&USBD_ConfigDescriptor[desc_ptr], &USBD_ConfigDescriptor_HS[desc_ptr], usbd_bulk_if_num);
     usbd_bulk_init();
+#endif
+
+#if (USBD_I2C_ENABLE)
+    usbd_i2c_if_num = if_num++;
+    desc_ptr += i2c_desc_fill(&USBD_ConfigDescriptor[desc_ptr], &USBD_ConfigDescriptor_HS[desc_ptr], usbd_i2c_if_num);
+    usbd_i2c_init();
 #endif
 
 #if (USBD_CLS_ENABLE)

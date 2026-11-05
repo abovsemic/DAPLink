@@ -28,5 +28,8 @@ extern void USBD_BULK_EP_BULKIN_Event(U32 event);
 extern void USBD_BULK_EP_BULKOUT_Event(U32 event);
 extern void USBD_BULK_EP_BULK_Event(U32 event);
 
+/* Second vendor bulk interface (USBD_I2C_ENABLE, HIC specific) */
+extern void USBD_I2C_EP_BULK_Event(U32 event);
+
 
 #endif  /* __USBD_BULK_H__ */
