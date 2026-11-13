@@ -704,8 +704,8 @@ uint32_t SWO_Data (const uint8_t *request, uint8_t *response) {
   if (TraceTransport == 1U) {
     n = (uint32_t)(*(request+0) << 0) |
         (uint32_t)(*(request+1) << 8);
-    if (n > (DAP_PACKET_SIZE - 4U)) {
-      n = DAP_PACKET_SIZE - 4U;
+    if (n > (DAP_PACKET_SIZE_INFO - 4U)) {    // packet size of the interface (v1 HID: 64)
+      n = DAP_PACKET_SIZE_INFO - 4U;
     }
     if (count > n) {
       count = n;
