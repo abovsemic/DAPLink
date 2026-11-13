@@ -8,7 +8,7 @@
  * I2C2 master on SCL2 = PA8, SDA2 = PA9 (AF5, open-drain, pull-ups on the target board).
  * Touch IC interrupt input on PA10 (EINT0), used as stream trigger.
  * The commands use the DAP vendor extended IDs and come from two paths:
- *  - the CMSIS-DAP v2 interface (DAP_ProcessVendorCommandEx, __WEAK in DAP.c), packet DAP_PACKET_SIZE
+ *  - the CMSIS-DAP v2/v1 interface (DAP_ProcessVendorCommandEx, __WEAK in DAP.c), packet DAP_PACKET_SIZE_INFO
  *  - the I2C USB interface (own WinUSB interface and EP5, one command per transfer), packet
  *    I2CU_PACKET_SIZE: usable while a debugger (Keil, OpenOCD) holds the CMSIS-DAP interface.
  * Multi-byte fields are little-endian, len/count fields are 16 bit.
@@ -1223,7 +1223,7 @@ static uint32_t I2C_Execute(const uint8_t *request, uint8_t *response, uint32_t 
 // Process DAP vendor extended command (overrides the __WEAK default in DAP.c)
 uint32_t DAP_ProcessVendorCommandEx(const uint8_t *request, uint8_t *response)
 {
-    return I2C_Execute(request, response, DAP_PACKET_SIZE);
+    return I2C_Execute(request, response, DAP_PACKET_SIZE_INFO);   /* 64 when sent on v1 (HID) */
 }
 
 #if defined(BULK_ENDPOINT)

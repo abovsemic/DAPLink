@@ -76,7 +76,7 @@ This information includes:
 /// This configuration settings is used to optimize the communication performance with the
 /// debugger and depends on the USB peripheral. Typical vales are 64 for Full-speed USB HID or WinUSB,
 /// 1024 for High-speed USB HID and 512 for High-speed USB WinUSB.
-#ifndef HID_ENDPOINT            //HID end points currently set limits to 64
+#if defined(BULK_ENDPOINT)      //bulk (v2): 512, a v1 (HID) next to it gets 64 (DAP_PACKET_SIZE_PER_INTERFACE)
 #define DAP_PACKET_SIZE         512              ///< Specifies Packet Size in bytes.
 #else
 #define DAP_PACKET_SIZE         64              ///< Specifies Packet Size in bytes.
@@ -86,7 +86,7 @@ This information includes:
 /// This configuration settings is used to optimize the communication performance with the
 /// debugger and depends on the USB peripheral. For devices with limited RAM or USB buffer the
 /// setting can be reduced (valid range is 1 .. 255). Change setting to 4 for High-Speed USB.
-#ifndef HID_ENDPOINT
+#if defined(BULK_ENDPOINT)
 #define DAP_PACKET_COUNT       2              ///< Bulk (512-byte packets): 2 buffers to save RAM.
 #else
 #define DAP_PACKET_COUNT       4              ///< Buffers: 64 = Full-Speed, 4 = High-Speed.
@@ -142,8 +142,12 @@ This information includes:
 
 ///@}
 
-#define CMSIS_DAP_PRODUCT_NAME "A-Link-MINI-V1 CMSIS-DAP"
+#define CMSIS_DAP_PRODUCT_NAME "A-Link-MINI-V1 CMSIS-DAP v2"   ///< DAP_Info product name on v2 (bulk)
 #define DAP_FW_VER             "2.1.1"          ///< DAP_Info Firmware Version (DAP.h default 2.1.0)
+#if defined(BULK_ENDPOINT) && defined(HID_ENDPOINT)
+#define DAP_PACKET_SIZE_PER_INTERFACE           ///< DAP_Info packet size: 64 on v1 (HID), DAP_PACKET_SIZE on v2
+#define CMSIS_DAP_PRODUCT_NAME_V1 "A-Link-MINI-V1 CMSIS-DAP v1"   ///< DAP_Info product name on v1 (HID)
+#endif
 
 //**************************************************************************************************
 /**

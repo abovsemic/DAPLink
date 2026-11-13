@@ -60,6 +60,11 @@ __STATIC_INLINE uint8_t DAP_GetVendorString (char *str) {
 \return String length (including terminating NULL character) or 0 (no string).
 */
 __STATIC_INLINE uint8_t DAP_GetProductString (char *str) {
+#if defined(DAP_PACKET_SIZE_PER_INTERFACE) && defined(CMSIS_DAP_PRODUCT_NAME_V1)
+    if (DAP_PACKET_SIZE_INFO != DAP_PACKET_SIZE) {          // request came from v1 (HID)
+        return return_dap_string(str, CMSIS_DAP_PRODUCT_NAME_V1);
+    }
+#endif
     return return_dap_string(str, CMSIS_DAP_PRODUCT_NAME);
 }
 

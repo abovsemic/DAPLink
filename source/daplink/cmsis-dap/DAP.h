@@ -39,6 +39,17 @@
 #define DAP_FW_VER                      "2.1.0"
 #endif
 
+// Packet size reported by DAP_Info. With v1 (HID) and v2 (bulk) in one build (DAP_config.h defines
+// DAP_PACKET_SIZE_PER_INTERFACE) it is the size of the interface the running command came from.
+#if defined(DAP_PACKET_SIZE_PER_INTERFACE)
+extern uint16_t DAP_PacketSizeInfo;
+#define DAP_PACKET_SIZE_INFO            DAP_PacketSizeInfo
+#define DAP_PACKET_SIZE_SET(size)       (DAP_PacketSizeInfo = (uint16_t)(size))
+#else
+#define DAP_PACKET_SIZE_INFO            DAP_PACKET_SIZE
+#define DAP_PACKET_SIZE_SET(size)
+#endif
+
 // DAP Command IDs
 #define ID_DAP_Info                     0x00U
 #define ID_DAP_HostStatus               0x01U

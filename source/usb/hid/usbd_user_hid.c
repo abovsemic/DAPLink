@@ -111,6 +111,7 @@ void usbd_hid_set_report(U8 rtype, U8 rid, U8 *buf, int len, U8 req)
             }
 
             // execute and store to DAP_queue
+            DAP_PACKET_SIZE_SET(USBD_HID_OUTREPORT_MAX_SZ);
             if (DAP_queue_execute_buf(&DAP_Cmd_queue, buf, len, &rbuf)) {
                 if (USB_ResponseIdle) {
                     hid_send_packet();

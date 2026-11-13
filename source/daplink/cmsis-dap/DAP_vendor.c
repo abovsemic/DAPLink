@@ -216,11 +216,13 @@ uint32_t DAP_ProcessVendorCommand(const uint8_t *request, uint8_t *response) {
         //              BYTE 0
         //                                              0x00 - OK
         *response = DAP_OK;
+#ifdef DRAG_N_DROP_SUPPORT
         if (0x00U == *request) {
             flash_manager_set_page_erase(false);
         } else {
             flash_manager_set_page_erase(true);
         }
+#endif
         num += (1U << 16) | 1U; // increment request and response count each by 1
         break;
     }

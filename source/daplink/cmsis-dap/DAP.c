@@ -63,6 +63,10 @@ volatile uint8_t    DAP_TransferAbort;  // Transfer Abort Flag
 
 static const char DAP_FW_Ver [] = DAP_FW_VER;
 
+#if defined(DAP_PACKET_SIZE_PER_INTERFACE)
+uint16_t DAP_PacketSizeInfo = DAP_PACKET_SIZE;
+#endif
+
 
 
 // Get DAP Information
@@ -154,8 +158,8 @@ static uint8_t DAP_Info(uint8_t id, uint8_t *info) {
 #endif
       break;
     case DAP_ID_PACKET_SIZE:
-      info[0] = (uint8_t)(DAP_PACKET_SIZE >> 0);
-      info[1] = (uint8_t)(DAP_PACKET_SIZE >> 8);
+      info[0] = (uint8_t)(DAP_PACKET_SIZE_INFO >> 0);
+      info[1] = (uint8_t)(DAP_PACKET_SIZE_INFO >> 8);
       length = 2U;
       break;
     case DAP_ID_PACKET_COUNT:

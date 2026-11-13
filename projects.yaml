@@ -37,6 +37,20 @@ module:
         - records/daplink/interface.yaml
         - records/daplink/target_family.yaml
         - records/daplink/target_board.yaml
+    # A31G336: no MSC/drag-n-drop (EP2 used by CMSIS-DAP v1 HID, flash for a second image)
+    if_a31g336: &module_if_a31g336
+        - *module_tools
+        - records/usb/usb-core.yaml
+        - records/usb/usb-cdc.yaml
+        - records/usb/usb-webusb.yaml
+        - records/usb/usb-winusb.yaml
+        - records/daplink/cmsis-dap.yaml
+        - records/daplink/usb2uart.yaml
+        - records/daplink/settings.yaml
+        - records/daplink/settings_rom.yaml
+        - records/daplink/interface.yaml
+        - records/daplink/target_family.yaml
+        - records/daplink/target_board.yaml
     # HICs
     hic_k20dx: &module_hic_k20dx
         - records/rtos/rtos-cm3.yaml
@@ -105,6 +119,7 @@ module:
         - records/rtos/rtos-cm0.yaml
         - records/hic_hal/a31g336.yaml
         - records/usb/usb-bulk.yaml
+        - records/usb/usb-hid.yaml
 
 projects:
     # HIC bootloaders and all target interfaces
@@ -209,7 +224,7 @@ projects:
         - records/family/all_family.yaml
         - records/usb/usb-bulk.yaml
     a31g336_if:
-        - *module_if
+        - *module_if_a31g336
         - *module_hic_a31g336
         - records/family/all_family.yaml
 

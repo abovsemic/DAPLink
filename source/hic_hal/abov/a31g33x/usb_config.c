@@ -56,7 +56,7 @@
 #define USBD_MAX_PACKET0            64
 #define USBD_DEVDESC_IDVENDOR       0x1A29	//ABOV		0x0D28
 #define USBD_DEVDESC_IDPRODUCT      0xA809	//A-Link (CMSIS-DAP v2 bulk; 0xA808 = HID version)	0x0204
-#define USBD_DEVDESC_BCDDEVICE      0x0101  // 0x0101: I2C interface added (new bcdDevice: Windows reads the MS OS 2.0 set again)
+#define USBD_DEVDESC_BCDDEVICE      0x0102  // 0x0101: I2C interface added, 0x0102: MSC removed, v1 HID added (new bcdDevice: Windows reads the MS OS 2.0 set again)
 
 //   <h> Configuration Settings
 //     <i> These settings affect Configuration Descriptor
@@ -163,9 +163,9 @@
 #ifndef BULK_ENDPOINT               //check if bulk endpoint is not enabled
 #define USBD_HID_EP_INTIN           1
 #define USBD_HID_EP_INTOUT          1
-#else                               //if bulk endpoint is enabled remove interrupt endpoints from the hid
-#define USBD_HID_EP_INTIN           0
-#define USBD_HID_EP_INTOUT          0
+#else                               //v1 (HID) next to v2 (bulk EP1): EP2, free without MSC
+#define USBD_HID_EP_INTIN           2
+#define USBD_HID_EP_INTOUT          2
 #endif
 #define USBD_HID_EP_INTIN_STACK     0
 #define USBD_HID_WMAXPACKETSIZE     64
@@ -397,11 +397,11 @@
 #else
 #define BULK_ENDPOINT 1
 #endif
-#if (BULK_ENDPOINT && HID_ENDPOINT)
-#error "BULK_ENDPOINT and HID_ENDPOINT cannot be used together (both use EP1): remove HID_ENDPOINT"
+#if (BULK_ENDPOINT && HID_ENDPOINT && MSC_ENDPOINT)
+#error "HID next to bulk uses EP2: remove MSC_ENDPOINT (EP1..EP5 only)"
 #endif
 #define USBD_BULK_ENABLE             BULK_ENDPOINT
-#define USBD_BULK_EP_BULKIN          1 // fixme: both bulk and hid ep cannot be both enabled in a single build
+#define USBD_BULK_EP_BULKIN          1
 #define USBD_BULK_EP_BULKOUT         1
 #define USBD_BULK_EP_BULKIN_SWO      6
 #define USBD_BULK_WMAXPACKETSIZE     64

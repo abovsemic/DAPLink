@@ -29,6 +29,7 @@ common:
         - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/Include
         - source/hic_hal/abov/a31g33x/audk32/Platform/HAL/HPL/Include
         - source/hic_hal/abov/a31g33x/audk32/Platform/Library/ABOV/Debug/Include
+        - source/daplink/drag-n-drop    # headers only (target_board.h, DAP_vendor.c): no drag-n-drop sources
     sources:
         hic_hal:
             - source/hic_hal/abov/a31g33x
